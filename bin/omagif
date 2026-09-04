@@ -1,0 +1,194 @@
+#!/bin/bash
+
+# Omagif CLI — a thin wrapper over the omarchy-shell IPC, plus the bits of
+# setup that want a terminal (API keys, dependency checks).
+
+set -euo pipefail
+
+PLUGIN_ID="stoneynutcase.omagif"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CONFIG="$HOME/.config/omarchy/omagif.json"
+
+usage() {
+  cat <<'EOF'
+Omagif — GIF picker for the Omarchy shell
+
+  omagif [toggle]        Toggle the GIF picker overlay (default)
+  omagif open            Open the overlay
+  omagif close           Close the overlay
+  omagif setup [--provider <id>]
+                         Pick a service, add its API key, write the config
+  omagif config          Print the config path, or open it in $EDITOR
+  omagif install         Put `omagif` on PATH and add a desktop entry
+  omagif doctor          Check dependencies, config, and plugin status
+  omagif history [clear] List past searches, or forget them all
+EOF
+}
+
+HISTORY="${XDG_STATE_HOME:-$HOME/.local/state}/omagif/history.json"
+
+do_history() {
+  if [[ ${1:-} == "clear" ]]; then
+    rm -f "$HISTORY"
+    echo "Forgot every remembered search."
+    echo "Note: the picker keeps its own copy until the shell reloads the file."
+    return 0
+  fi
+  if [[ ! -f $HISTORY ]]; then
+    echo "No search history yet ($HISTORY)"
+    return 0
+  fi
+  python3 -c 'import json,sys
+try:
+    entries = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    entries = []
+for i, entry in enumerate(entries, 1):
+    print(f"{i:3}. {entry}")' "$HISTORY"
+}
+
+# Reads the config through python rather than grep so a hand-edited file with
+# comments-that-aren't-JSON fails loudly here instead of silently in the shell.
+config_get() {
+  python3 - "$CONFIG" "$1" <<'PY'
+import json, sys
+path, key = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+cur = data
+for part in key.split("."):
+    if not isinstance(cur, dict) or part not in cur:
+        sys.exit(0)
+    cur = cur[part]
+print(cur if isinstance(cur, str) else json.dumps(cur))
+PY
+}
+
+ipc() {
+  if ! command -v omarchy-shell >/dev/null 2>&1; then
+    echo "omagif: omarchy-shell is not on PATH — is the Omarchy shell running?" >&2
+    exit 1
+  fi
+  omarchy-shell shell "$1" "$PLUGIN_ID" '{}'
+}
+
+do_install() {
+  mkdir -p "$HOME/.local/bin"
+  ln -sf "$SCRIPT_DIR/omagif" "$HOME/.local/bin/omagif"
+  echo "Linked $HOME/.local/bin/omagif"
+
+  if [[ -f "$ROOT_DIR/share/omagif.desktop" ]]; then
+    mkdir -p "$HOME/.local/share/applications"
+    install -m 644 "$ROOT_DIR/share/omagif.desktop" "$HOME/.local/share/applications/omagif.desktop"
+    command -v update-desktop-database >/dev/null 2>&1 &&
+      update-desktop-database "$HOME/.local/share/applications" || true
+    echo "Installed desktop entry"
+  fi
+
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) echo "Note: $HOME/.local/bin is not on your PATH." ;;
+  esac
+}
+
+do_doctor() {
+  local status=0
+
+  echo "Dependencies:"
+  for tool in curl wl-copy wtype xdg-open python3; do
+    if command -v "$tool" >/dev/null 2>&1; then
+      echo "  ok       $tool"
+    else
+      echo "  MISSING  $tool"
+      status=1
+    fi
+  done
+  if command -v notify-send >/dev/null 2>&1; then
+    echo "  ok       notify-send"
+  else
+    echo "  absent   notify-send (optional — you just lose the confirmations)"
+  fi
+
+  echo
+  echo "Config ($CONFIG):"
+  if [[ -f $CONFIG ]]; then
+    if ! python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$CONFIG" 2>/dev/null; then
+      echo "  INVALID  not valid JSON"
+      status=1
+    else
+      local provider
+      provider="$(config_get provider)"
+      provider="${provider:-giphy}"
+      echo "  provider $provider"
+      # Ask the catalogue which providers exist rather than hardcoding a list.
+      while read -r id enabled; do
+        [[ -n $id ]] || continue
+        if [[ -n "$(config_get "$id.apiKey")" ]]; then
+          echo "  ok       $id key present"
+        elif [[ $enabled == "True" ]]; then
+          echo "  absent   $id key"
+          [[ $id == "$provider" ]] && status=1
+        else
+          echo "  n/a      $id closed to new sign-ups"
+        fi
+      done < <(python3 -c 'import json,sys
+try:
+    data = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    sys.exit(0)
+for entry in data.get("providers", []):
+    if isinstance(entry, dict):
+        print(entry.get("id",""), entry.get("enabled") is True)' "$ROOT_DIR/providers/index.json")
+    fi
+  else
+    echo "  MISSING  run: omagif setup"
+    status=1
+  fi
+
+  echo
+  echo "Plugin:"
+  if command -v omarchy >/dev/null 2>&1 && omarchy plugin list 2>/dev/null | grep -q "$PLUGIN_ID"; then
+    echo "  ok       $PLUGIN_ID discovered by the shell"
+  else
+    echo "  MISSING  $PLUGIN_ID not discovered — is it in ~/.config/omarchy/plugins/?"
+    status=1
+  fi
+
+  [[ $status -eq 0 ]] && echo && echo "All good." || true
+  return $status
+}
+
+case "${1:-toggle}" in
+  toggle) ipc toggle ;;
+  open)   ipc summon ;;
+  close)  ipc hide ;;
+  setup)
+    shift
+    exec "$ROOT_DIR/setup" "$@"
+    ;;
+  config)
+    if [[ -n ${EDITOR:-} && ${2:-} == "--edit" ]]; then
+      mkdir -p "$(dirname "$CONFIG")"
+      [[ -f $CONFIG ]] || cp "$ROOT_DIR/omagif.example.json" "$CONFIG"
+      exec "$EDITOR" "$CONFIG"
+    fi
+    echo "$CONFIG"
+    ;;
+  install) do_install ;;
+  doctor)  do_doctor ;;
+  history)
+    shift
+    do_history "$@"
+    ;;
+  -h | --help | help) usage ;;
+  *)
+    echo "omagif: unknown command '$1'" >&2
+    echo >&2
+    usage >&2
+    exit 64
+    ;;
+esac

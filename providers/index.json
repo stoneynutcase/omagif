@@ -1,0 +1,23 @@
+{
+  "//": "Provider catalogue. Read by both Omagif.qml (via a FileView) and by ./setup, so a provider's human-facing details are stated exactly once. The matching request/parse logic lives in providers/<Id>.js — see providers/README.md.",
+
+  "providers": [
+    {
+      "id": "giphy",
+      "label": "Giphy",
+      "enabled": true,
+      "keyUrl": "https://developers.giphy.com/dashboard/",
+      "keyHint": "Create an app, choose the API (not the SDK), and copy its API key.",
+      "verifyUrl": "https://api.giphy.com/v1/gifs/trending?api_key={key}&limit=1"
+    },
+    {
+      "id": "tenor",
+      "label": "Tenor",
+      "enabled": false,
+      "disabledReason": "Google stopped accepting new Tenor API clients in January 2026. The v2 endpoint still serves existing keys, so this stays selectable for anyone who already has one — set enabled to true if they reopen signups.",
+      "keyUrl": "https://developers.google.com/tenor/guides/quickstart",
+      "keyHint": "Create a Google Cloud project, enable the Tenor API, then make an API key.",
+      "verifyUrl": "https://tenor.googleapis.com/v2/featured?key={key}&client_key=omagif&limit=1"
+    }
+  ]
+}

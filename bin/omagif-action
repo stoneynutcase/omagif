@@ -1,0 +1,224 @@
+#!/bin/bash
+
+# Side-effect worker for the Omagif overlay. The QML only ever runs this
+# detached, so everything that touches the network, the clipboard, the
+# keyboard, or the filesystem lives here and stays testable from a shell.
+#
+#   omagif-action <verb> <url> [cache-dir] [save-dir] [title]
+#
+# Verbs:
+#   cache       download the GIF into the cache and print its path
+#   copy-image  put the GIF on the clipboard as image/gif
+#   copy-file   put the GIF on the clipboard as text/uri-list (a pasted file)
+#   copy-url    put the GIF's URL on the clipboard as text
+#   paste-url   copy the URL and paste it into the focused window
+#   save        copy the GIF into the save directory under a readable name
+#   open        open the GIF's URL in the default browser
+#
+# The three copy verbs exist because the Wayland clipboard carries one payload
+# at a time and no single one pastes everywhere: `image/gif` is raw bytes that
+# some apps re-encode to a still frame, `text/uri-list` is a file reference
+# that chat apps attach whole (animation intact), and the plain URL is what
+# anything with link unfurling turns back into a playing GIF.
+
+set -euo pipefail
+
+verb="${1:-}"
+url="${2:-}"
+cache_dir="${3:-$HOME/.cache/omagif}"
+save_dir="${4:-$HOME/Pictures/gifs}"
+title="${5:-}"
+
+if [[ -z $verb || -z $url ]]; then
+  echo "usage: omagif-action <verb> <url> [cache-dir] [save-dir] [title]" >&2
+  exit 64
+fi
+
+notify() {
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send -a Omagif -i image-x-generic "$1" "${2:-}" || true
+  fi
+}
+
+# The overlay launches this detached, so stdout and stderr go nowhere. Keeping
+# a small log is the only way to find out why a paste or a copy did nothing.
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omagif"
+LOG="$LOG_DIR/omagif.log"
+
+log() {
+  mkdir -p "$LOG_DIR" 2>/dev/null || return 0
+  printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG" 2>/dev/null || true
+  # Keep it from growing without bound; this is a breadcrumb trail, not history.
+  if [[ $(wc -l <"$LOG" 2>/dev/null || echo 0) -gt 500 ]]; then
+    tail -n 200 "$LOG" >"$LOG.trim" 2>/dev/null && mv -f "$LOG.trim" "$LOG"
+  fi
+}
+
+# Reads one setting out of the plugin config, falling back to a default.
+setting() {
+  local key="$1" fallback="$2" value
+  value="$(
+    python3 - "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/omagif.json" "$key" 2>/dev/null <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+value = data.get(sys.argv[2]) if isinstance(data, dict) else None
+if value is not None and not isinstance(value, (dict, list)):
+    print(value)
+PY
+  )" || true
+  printf '%s' "${value:-$fallback}"
+}
+
+fail() {
+  notify "GIF failed" "$1"
+  echo "omagif-action: $1" >&2
+  exit 1
+}
+
+# Content-addressed so the same GIF is only ever downloaded once, and so a
+# title full of slashes and quotes can never shape a path.
+cache_path() {
+  local hash
+  hash="$(printf '%s' "$1" | sha1sum | cut -d' ' -f1)"
+  printf '%s/%s.gif' "$cache_dir" "$hash"
+}
+
+# Prints the local path of the GIF, downloading it first if it isn't cached.
+# Downloads land on a .part file and are moved into place only once complete,
+# so an interrupted run can't leave a truncated GIF in the cache.
+fetch() {
+  local path
+  path="$(cache_path "$url")"
+  if [[ -s $path ]]; then
+    printf '%s' "$path"
+    return 0
+  fi
+  mkdir -p "$cache_dir"
+  if ! curl -fsSL --max-time 45 -o "$path.part" "$url"; then
+    rm -f "$path.part"
+    return 1
+  fi
+  if [[ ! -s $path.part ]]; then
+    rm -f "$path.part"
+    return 1
+  fi
+  mv -f "$path.part" "$path"
+  printf '%s' "$path"
+}
+
+# Lowercased, punctuation-free, and length-capped — a GIF title is arbitrary
+# remote text, so nothing from it reaches the filesystem unfiltered.
+slug() {
+  local s
+  s="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | tr -s '-')"
+  s="${s#-}"
+  s="${s%-}"
+  printf '%s' "${s:0:48}"
+}
+
+case "$verb" in
+  cache)
+    path="$(fetch)" || exit 1
+    printf '%s' "$path"
+    ;;
+
+  copy-image)
+    path="$(fetch)" || fail "could not download the GIF"
+    # wl-copy forks and keeps serving the selection after we exit.
+    wl-copy --type image/gif <"$path" || fail "could not reach the clipboard"
+    notify "GIF copied" "Paste it wherever you like"
+    ;;
+
+  copy-file)
+    path="$(fetch)" || fail "could not download the GIF"
+    # Cache files are named by hash, but this one gets attached to a message
+    # with its name showing, so hand the receiving app a readable one. A
+    # hardlink costs nothing and keeps a single copy of the bytes.
+    name="$(slug "$title")"
+    [[ -n $name ]] || name="gif"
+    mkdir -p "$cache_dir/named"
+    link="$cache_dir/named/$name.gif"
+    if [[ -e $link ]] && ! cmp -s "$path" "$link"; then
+      # Same title, different GIF — keep both rather than swapping the file
+      # out from under a paste that hasn't happened yet.
+      link="$cache_dir/named/$name-$(basename "$path" .gif | cut -c1-6).gif"
+    fi
+    ln -f "$path" "$link" 2>/dev/null || cp -f "$path" "$link"
+
+    # A uri-list is CRLF-terminated by spec, and the path is percent-encoded
+    # properly rather than pasted in raw, so a cache directory with a space in
+    # it still produces a URI the receiving app can resolve.
+    uri="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$link")"
+    printf '%s\r\n' "$uri" | wl-copy --type text/uri-list || fail "could not reach the clipboard"
+    notify "GIF copied as a file" "$(basename "$link")"
+    ;;
+
+  copy-url)
+    printf '%s' "$url" | wl-copy --type text/plain || fail "could not reach the clipboard"
+    notify "Link copied" "$url"
+    ;;
+
+  paste-url)
+    # Copy first and leave it there. The emoji picker holds the selection only
+    # for the length of the paste and then drops it, but a link is worth
+    # keeping: if the synthetic keypress misses, Ctrl+V still works instead of
+    # leaving the user with nothing.
+    printf '%s' "$url" | wl-copy --type text/plain || fail "could not reach the clipboard"
+
+    # The overlay has just unmapped a layer surface that held *exclusive*
+    # keyboard focus. The compositor hands focus back asynchronously, and a
+    # keypress sent before that lands nowhere — the single most likely reason
+    # an auto-paste silently does nothing.
+    delay="$(setting pasteDelayMs 300)"
+    [[ $delay =~ ^[0-9]+$ ]] || delay=300
+    sleep "$(awk "BEGIN { printf \"%.3f\", $delay / 1000 }")"
+
+    # Ctrl+V by default: Electron apps (Signal, Slack, Discord) handle it far
+    # more reliably than Shift+Insert.
+    case "$(setting pasteKey ctrl+v)" in
+      shift+insert) keys=(-M shift -k Insert -m shift) ;;
+      ctrl+shift+v) keys=(-M ctrl -M shift -k v -m shift -m ctrl) ;;
+      *) keys=(-M ctrl -k v -m ctrl) ;;
+    esac
+
+    if wtype "${keys[@]}" 2>>"$LOG"; then
+      log "paste-url: sent ${keys[*]} after ${delay}ms"
+    else
+      log "paste-url: wtype ${keys[*]} failed; link left on the clipboard"
+      notify "Link copied" "Auto-paste didn't land — press Ctrl+V"
+    fi
+    ;;
+
+  save)
+    path="$(fetch)" || fail "could not download the GIF"
+    mkdir -p "$save_dir"
+    name="$(slug "$title")"
+    [[ -n $name ]] || name="gif"
+    dest="$save_dir/$name.gif"
+    # Never clobber: walk a suffix until the name is free.
+    n=2
+    while [[ -e $dest ]]; do
+      if cmp -s "$path" "$dest"; then
+        notify "Already saved" "$dest"
+        exit 0
+      fi
+      dest="$save_dir/$name-$n.gif"
+      n=$((n + 1))
+    done
+    cp "$path" "$dest"
+    notify "GIF saved" "$dest"
+    ;;
+
+  open)
+    xdg-open "$url" >/dev/null 2>&1 &
+    ;;
+
+  *)
+    echo "omagif-action: unknown verb '$verb'" >&2
+    exit 64
+    ;;
+esac

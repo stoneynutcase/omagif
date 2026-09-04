@@ -1,0 +1,38 @@
+{
+  "//provider": "which service to search; ids come from providers/index.json",
+  "provider": "giphy",
+
+  "//giphy": "settings under a provider's id are handed to that provider's module",
+  "giphy": {
+    "apiKey": "",
+    "rating": "pg-13",
+    "lang": "en"
+  },
+
+  "//tenor": "closed to new sign-ups since Jan 2026; kept for existing keys",
+  "tenor": {
+    "apiKey": "",
+    "contentFilter": "medium",
+    "locale": "en_US"
+  },
+
+  "limit": 40,
+  "columns": 4,
+
+  "//enterAction": "what Enter and left-click do: file | link | paste | image",
+  "enterAction": "file",
+
+  "//historyLimit": "searches to remember for Ctrl+Up; 0 records none",
+  "historyLimit": 50,
+
+  "//linkStyle": "what a copied link points at: page (share link) | direct (short .gif)",
+  "linkStyle": "page",
+
+  "//pasteKey": "auto-paste keystroke: ctrl+v | shift+insert | ctrl+shift+v",
+  "pasteKey": "ctrl+v",
+  "//pasteDelayMs": "wait before the keystroke, so focus is back on your app",
+  "pasteDelayMs": 300,
+
+  "cacheDir": "~/.cache/omagif",
+  "saveDir": "~/Pictures/gifs"
+}

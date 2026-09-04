@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "stoneynutcase.omagif",
+  "name": "Omagif",
+  "version": "1.0.0",
+  "author": "stoneynutcase",
+  "license": "MIT",
+  "description": "Search Tenor or Giphy and drop a GIF straight onto your clipboard",
+  "kinds": [
+    "overlay",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Omagif.qml",
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Omagif",
+    "description": "Top bar button that opens the GIF picker",
+    "category": "Utility",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

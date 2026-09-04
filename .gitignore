@@ -1,0 +1,16 @@
+# This repo is checked out in place at ~/.config/omarchy/plugins/<id>/, so the
+# only things worth ignoring are strays that land next to the source. Nothing
+# the plugin produces at runtime lives here:
+#
+#   ~/.config/omarchy/omagif.json   config, including the API key
+#   ~/.cache/omagif/                downloaded GIFs
+#   ~/.local/state/omagif/          search history and the action log
+
+# Interrupted downloads, if a cacheDir is ever pointed inside the checkout
+*.part
+.cache/
+
+# Editor and OS strays
+*.swp
+*~
+.DS_Store

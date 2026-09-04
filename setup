@@ -1,0 +1,418 @@
+#!/usr/bin/env bash
+
+# Interactive first-run setup for Omagif.
+#
+# Every GIF service needs a free API key — none offers keyless search any more
+# — so the picker can't do anything until one is configured. This walks through
+# picking a service, getting a key, checking that the key actually works, and
+# writing ~/.config/omarchy/omagif.json.
+#
+# The list of services, where to get their keys, and how to verify one all come
+# from providers/index.json, the same catalogue the picker reads. Adding a
+# provider never means editing this script — see providers/README.md.
+#
+# Run it from a terminal, or let the picker launch it: the overlay's first-run
+# screen opens this in a floating terminal.
+#
+#   ./setup [--provider <id>]
+
+set -euo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PLUGIN_ID="stoneynutcase.omagif"
+CATALOGUE="$SCRIPT_DIR/providers/index.json"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+CONFIG="$CONFIG_HOME/omarchy/omagif.json"
+BINDINGS="$CONFIG_HOME/hypr/bindings.lua"
+KEYBIND_KEYS="SUPER + SHIFT + PERIOD"
+KEYBIND="o.bind(\"$KEYBIND_KEYS\", \"GIF picker\", \"omarchy-shell shell toggle $PLUGIN_ID\")"
+
+provider=""
+
+usage() {
+  cat <<'EOF'
+Usage: ./setup [--provider <id>]
+
+Configures the API key Omagif needs to search for GIFs.
+
+  --provider <id>   Skip the service question (e.g. --provider giphy)
+
+Available services come from providers/index.json.
+EOF
+}
+
+while (($# > 0)); do
+  case "$1" in
+    --provider)
+      shift
+      provider="${1:-}"
+      [[ -n $provider ]] || { echo "setup: --provider needs an id" >&2; exit 64; }
+      ;;
+    --provider=*) provider="${1#*=}" ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 64
+      ;;
+  esac
+  shift
+done
+
+# ---- catalogue access. One python call per field keeps this readable; the
+#      file is tiny and setup runs once.
+catalogue_field() {
+  python3 - "$CATALOGUE" "$1" "$2" <<'PY_FIELD'
+import json, sys
+path, provider_id, field = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+for entry in data.get("providers", []):
+    if isinstance(entry, dict) and entry.get("id") == provider_id:
+        value = entry.get(field, "")
+        print(value if not isinstance(value, bool) else str(value).lower())
+        break
+PY_FIELD
+}
+
+# Providers a fresh install can actually sign up for. One that has been retired
+# stays selectable for anyone who already holds a key.
+catalogue_offerable() {
+  python3 - "$CATALOGUE" "$CONFIG" <<'PY_LIST'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+try:
+    with open(sys.argv[2]) as fh:
+        config = json.load(fh)
+except (OSError, ValueError):
+    config = {}
+for entry in data.get("providers", []):
+    if not isinstance(entry, dict):
+        continue
+    entry_id = entry.get("id", "")
+    section = config.get(entry_id) if isinstance(config, dict) else None
+    has_key = isinstance(section, dict) and str(section.get("apiKey", "")).strip() != ""
+    if entry.get("enabled") is True or has_key:
+        print(f"{entry_id}\t{entry.get('label', entry_id)}")
+PY_LIST
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# gum is what Omarchy's own tooling prompts with, and the floating-terminal
+# launcher themes it to match. Everything still works over a plain pipe or an
+# ssh session without it.
+heading() {
+  if have gum; then
+    printf '\n'
+    gum style --bold --foreground 4 "$1"
+  else
+    printf '\n== %s\n' "$1"
+  fi
+}
+
+note() {
+  if have gum; then gum style --faint "$1"; else printf '   %s\n' "$1"; fi
+}
+
+confirm() {
+  local prompt="$1" default="${2:-no}"
+  if have gum; then
+    if [[ $default == yes ]]; then gum confirm "$prompt"; else gum confirm --default=false "$prompt"; fi
+  else
+    local suffix="[y/N]" answer
+    [[ $default == yes ]] && suffix="[Y/n]"
+    read -rp "$prompt $suffix " answer
+    [[ $default == yes ]] && [[ -z $answer ]] && return 0
+    [[ $answer =~ ^[Yy] ]]
+  fi
+}
+
+ask() {
+  local prompt="$1"
+  if have gum; then
+    gum input --prompt "$prompt " --placeholder "paste it here" --width 80
+  else
+    local value
+    read -rp "$prompt " value
+    printf '%s' "$value"
+  fi
+}
+
+fail() {
+  echo "omagif setup: $*" >&2
+  exit 1
+}
+
+# ------------------------------------------------------------------ deps
+
+heading "Checking dependencies"
+missing=()
+for tool in curl python3 wl-copy wtype; do
+  if have "$tool"; then
+    printf '  ✓ %s\n' "$tool"
+  else
+    printf '  ✗ %s\n' "$tool"
+    missing+=("$tool")
+  fi
+done
+
+if ((${#missing[@]} > 0)); then
+  echo
+  echo "Missing: ${missing[*]}"
+  echo "On Omarchy these come from the wl-clipboard, wtype, curl and python packages:"
+  echo "  omarchy pkg add wl-clipboard wtype curl python"
+  fail "install the missing tools and run setup again"
+fi
+
+# ------------------------------------------------------------------ provider
+
+mapfile -t offerable < <(catalogue_offerable)
+((${#offerable[@]} > 0)) || fail "no usable providers listed in $CATALOGUE"
+
+if [[ -z $provider ]]; then
+  if ((${#offerable[@]} == 1)); then
+    provider="${offerable[0]%%$'\t'*}"
+  else
+    heading "Which GIF service should Omagif search?"
+    echo "  Each needs a free API key; none offers keyless search any more."
+    echo
+    labels=()
+    for row in "${offerable[@]}"; do labels+=("${row#*$'\t'}"); done
+    if have gum; then
+      choice="$(printf '%s\n' "${labels[@]}" | gum choose --header="Pick a service:")" || fail "cancelled"
+    else
+      for i in "${!labels[@]}"; do printf '  %d) %s\n' "$((i + 1))" "${labels[$i]}"; done
+      read -rp "Choice [1]: " raw
+      choice="${labels[$(((${raw:-1} - 1)))]:-${labels[0]}}"
+    fi
+    for row in "${offerable[@]}"; do
+      [[ ${row#*$'\t'} == "$choice" ]] && provider="${row%%$'\t'*}"
+    done
+  fi
+fi
+
+label="$(catalogue_field "$provider" label)"
+[[ -n $label ]] || fail "unknown provider '$provider' — not listed in $CATALOGUE"
+key_url="$(catalogue_field "$provider" keyUrl)"
+key_hint="$(catalogue_field "$provider" keyHint)"
+verify_template="$(catalogue_field "$provider" verifyUrl)"
+
+# A retired provider stays reachable for anyone who already holds a key, but
+# says so plainly first rather than sending someone to a dead sign-up page.
+if [[ "$(catalogue_field "$provider" enabled)" != "true" ]]; then
+  heading "$label is closed to new sign-ups"
+  reason="$(catalogue_field "$provider" disabledReason)"
+  [[ -n $reason ]] && note "$reason"
+  confirm "Continue anyway? Only useful if you already have a key." || fail "aborted"
+fi
+
+# ------------------------------------------------------------------ existing
+
+existing_key="$(
+  python3 - "$CONFIG" "$provider" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1]) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(0)
+section = data.get(sys.argv[2]) if isinstance(data, dict) else None
+if isinstance(section, dict) and isinstance(section.get("apiKey"), str):
+    print(section["apiKey"].strip())
+PY
+)"
+
+if [[ -n $existing_key ]]; then
+  heading "You already have a $label key"
+  note "${existing_key:0:6}…${existing_key: -4} in $CONFIG"
+  if ! confirm "Replace it?"; then
+    existing_key=""
+    key=""
+    keep_existing=true
+  fi
+fi
+
+# ------------------------------------------------------------------ key
+
+verify_key() {
+  local candidate="$1" url code
+  # A provider with no verifyUrl in the catalogue simply isn't checked.
+  [[ -n $verify_template ]] || { printf 'skip'; return 0; }
+  url="${verify_template//\{key\}/$candidate}"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)"
+  printf '%s' "$code"
+}
+
+if [[ ${keep_existing:-false} != true ]]; then
+  heading "Get a $label API key"
+  echo "  $key_hint"
+  echo "  $key_url"
+  echo
+  if have xdg-open && confirm "Open that page in your browser?" yes; then
+    xdg-open "$key_url" >/dev/null 2>&1 &
+    sleep 1
+  fi
+
+  key=""
+  for attempt in 1 2 3; do
+    echo
+    candidate="$(ask "Paste your $label API key:")"
+    candidate="${candidate//[[:space:]]/}"
+    if [[ -z $candidate ]]; then
+      echo "  Nothing pasted."
+      continue
+    fi
+
+    printf '  Checking the key against %s… ' "$label"
+    code="$(verify_key "$candidate")"
+    case "$code" in
+      skip)
+        echo "not checked (no verify URL for $label)."
+        key="$candidate"
+        break
+        ;;
+      200)
+        echo "works."
+        key="$candidate"
+        break
+        ;;
+      400 | 401 | 403)
+        echo "rejected (HTTP $code)."
+        note "That key isn't valid for $label, or the API isn't enabled for it yet."
+        ;;
+      429)
+        echo "rate limited (HTTP 429)."
+        note "The key looks real but is over quota right now."
+        if confirm "Save it anyway?"; then
+          key="$candidate"
+          break
+        fi
+        ;;
+      000)
+        echo "no response."
+        note "Couldn't reach $label — check your network."
+        if confirm "Save the key anyway?"; then
+          key="$candidate"
+          break
+        fi
+        ;;
+      *)
+        echo "unexpected HTTP $code."
+        if confirm "Save it anyway?"; then
+          key="$candidate"
+          break
+        fi
+        ;;
+    esac
+    ((attempt < 3)) && note "Try again — or press Ctrl+C to stop."
+  done
+
+  [[ -n $key ]] || fail "no working key entered; nothing was changed"
+fi
+
+# ------------------------------------------------------------------ write
+
+# Rewrites the whole document so hand-added settings (columns, saveDir, the
+# other provider's key) survive.
+python3 - "$CONFIG" "$provider" "${key:-}" <<'PY'
+import json, os, sys
+
+path, provider, key = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path) as fh:
+        data = json.load(fh)
+    if not isinstance(data, dict):
+        data = {}
+except (OSError, ValueError):
+    data = {}
+
+data["provider"] = provider
+section = data.get(provider)
+if not isinstance(section, dict):
+    section = {}
+if key:
+    section["apiKey"] = key
+if provider == "tenor":
+    section.setdefault("contentFilter", "medium")
+    section.setdefault("locale", "en_US")
+else:
+    section.setdefault("rating", "pg-13")
+    section.setdefault("lang", "en")
+data[provider] = section
+
+data.setdefault("limit", 40)
+data.setdefault("columns", 4)
+
+os.makedirs(os.path.dirname(path), exist_ok=True)
+tmp = path + ".tmp"
+with open(tmp, "w") as fh:
+    json.dump(data, fh, indent=2)
+    fh.write("\n")
+os.chmod(tmp, 0o600)
+os.replace(tmp, path)
+PY
+
+heading "Saved"
+note "$CONFIG  (provider: $provider)"
+note "The shell watches that file — the picker is already using it."
+
+# ------------------------------------------------------------------ enable
+
+if have omarchy && have jq; then
+  enabled="$(omarchy plugin list --json 2>/dev/null |
+    jq -r --arg id "$PLUGIN_ID" 'map(select(.id == $id))[0].enabled // "unknown"')"
+  if [[ $enabled == "false" ]]; then
+    heading "Enable the plugin"
+    note "It's installed but not enabled, so nothing can open it yet."
+    if confirm "Enable $PLUGIN_ID now?" yes; then
+      omarchy plugin enable "$PLUGIN_ID" && note "Enabled — the 󰴾 button is on your bar."
+    fi
+  fi
+fi
+
+# ------------------------------------------------------------------ cli
+
+if [[ ! -e "$HOME/.local/bin/omagif" ]]; then
+  heading "Command line"
+  if confirm "Link 'omagif' into ~/.local/bin?" yes; then
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$SCRIPT_DIR/bin/omagif" "$HOME/.local/bin/omagif"
+    note "Linked. Try: omagif doctor"
+    case ":$PATH:" in
+      *":$HOME/.local/bin:"*) ;;
+      *) note "Heads up: ~/.local/bin isn't on your PATH." ;;
+    esac
+  fi
+fi
+
+# ------------------------------------------------------------------ keybind
+
+if [[ -f $BINDINGS ]] && ! grep -q "$PLUGIN_ID" "$BINDINGS"; then
+  heading "Keybinding"
+  echo "  $KEYBIND_KEYS  →  toggle the GIF picker"
+  note "(next to SUPER + PERIOD, the emoji picker)"
+  if grep -q "$KEYBIND_KEYS" "$BINDINGS"; then
+    note "$KEYBIND_KEYS is already bound to something else in your bindings.lua — skipping."
+  elif confirm "Add it to $BINDINGS?"; then
+    printf '\n-- Omagif GIF picker\n%s\n' "$KEYBIND" >>"$BINDINGS"
+    have hyprctl && hyprctl reload >/dev/null 2>&1 || true
+    note "Added. Press $KEYBIND_KEYS to try it."
+  else
+    note "Add it yourself any time:"
+    printf '     %s\n' "$KEYBIND"
+  fi
+fi
+
+heading "Done"
+echo "  Open the picker and start typing. Enter copies the GIF to your clipboard."
