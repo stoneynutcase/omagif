@@ -23,6 +23,7 @@ Item {
   readonly property string actionBin: sourceDir + "/bin/omagif-action"
   readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omagif/config.json"
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/omagif"
+  readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omagif"
 
   property bool opened: false
   property string filterText: ""
@@ -113,6 +114,10 @@ Item {
   // ------------------------------------------------------------- lifecycle
   function open(payloadJson) {
     root.opened = true
+    // Cheap, and it closes the gap for good: whatever the watcher did or did
+    // not notice while we were closed, opening re-reads the config. onLoaded
+    // re-runs the search, so a key added since last time takes effect here.
+    configFile.reload()
     root.filterSelected = false
     root.flashMessage = ""
     root.cursorActive = root.items.length > 0
@@ -416,6 +421,7 @@ Item {
 
   // -------------------------------------------------------------------- data
   FileView {
+    id: configFile
     path: root.configPath
     watchChanges: true
     printErrors: false
@@ -440,11 +446,16 @@ Item {
     }
   }
 
-  // FileView writes atomically via a temp file beside the target, so the
-  // directory has to exist before the first query is ever recorded.
+  // Both directories are created at startup, for two different reasons.
+  // History writes atomically via a temp file beside the target, so the state
+  // directory has to exist before the first query is recorded. The config
+  // directory matters even more: a FileView cannot watch a file inside a
+  // directory that does not exist, so without this a fresh install would sit
+  // there claiming no API key until the next shell restart, however long after
+  // setup ran.
   Process {
-    id: ensureStateDir
-    command: ["mkdir", "-p", root.stateDir]
+    id: ensureDirs
+    command: ["mkdir", "-p", root.stateDir, root.configDir]
     running: true
   }
 
