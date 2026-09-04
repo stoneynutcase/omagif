@@ -206,14 +206,23 @@ Item {
   }
 
   function historyStep(older) {
-    if (root.history.length === 0) return
+    // Silence here is indistinguishable from a broken keybinding, and an empty
+    // history is the normal state on a fresh install.
+    if (root.history.length === 0) {
+      if (older) root.flash(root.historyLimit === 0 ? "History is turned off"
+                                                    : "No search history yet")
+      return
+    }
 
     if (root.historyIndex === -1) {
       if (!older) return              // nothing newer than what you're typing
       root.historyDraft = root.filterText
       root.historyIndex = 0
     } else if (older) {
-      if (root.historyIndex >= root.history.length - 1) return   // oldest entry
+      if (root.historyIndex >= root.history.length - 1) {
+        root.flash("Oldest search")
+        return
+      }
       root.historyIndex++
     } else if (root.historyIndex === 0) {
       root.historyIndex = -1                                     // back to the draft
