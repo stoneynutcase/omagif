@@ -5,6 +5,8 @@ search, arrow around an animated grid, press Enter — the GIF is on your
 clipboard, ready to paste into Slack, Discord, Signal, or anywhere else that
 takes an image.
 
+![Omagif](preview.png)
+
 It's built the same way as Omarchy's own emoji picker: a Quickshell overlay
 running inside the long-lived `omarchy-shell` process, themed from the same
 `[menu]` tokens, so it looks like the rest of your desktop and opens instantly.
