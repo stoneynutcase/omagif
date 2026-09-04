@@ -93,8 +93,11 @@ function parse(raw, previousCursor) {
     return { items: [], next: "", error: "Unreadable response from Giphy" }
   }
 
+  // The status travels with the message so the caller can tell "your key is
+  // wrong" from "you are over quota" — very different advice.
   if (isObject(payload) && isObject(payload.meta) && parseInt(payload.meta.status, 10) >= 400)
-    return { items: [], next: "", error: trimmed(payload.meta.msg) || "Request rejected" }
+    return { items: [], next: "", status: parseInt(payload.meta.status, 10),
+             error: trimmed(payload.meta.msg) || "Request rejected" }
   if (isObject(payload) && typeof payload.message === "string" && payload.message && !payload.data)
     return { items: [], next: "", error: trimmed(payload.message) }
 

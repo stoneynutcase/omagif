@@ -278,10 +278,22 @@ Item {
     if (!url) return
     root.appending = append
     root.loading = true
-    // -f turns an HTTP error into exit 22 so a bad key surfaces as a failure
-    // rather than as an empty grid.
-    searchProc.command = ["curl", "-fsS", "--max-time", "12", url]
+    // --fail-with-body, not -f: both make an HTTP error a non-zero exit, but
+    // -f also discards the response, and the response is where the service
+    // explains itself ("Unauthorized", "rate limit exceeded"). curl's own
+    // error goes to stderr, which we do not collect, so stdout stays JSON.
+    searchProc.command = ["curl", "-sS", "--fail-with-body", "--max-time", "12", url]
     searchProc.running = true
+  }
+
+  // curl exit codes are diagnostic, not something to put in front of a
+  // person. These are the ones a GIF search realistically hits.
+  function curlMessage(exitCode) {
+    if (exitCode === 6) return "Can\u2019t reach " + providerLabel + " \u2014 you appear to be offline"
+    if (exitCode === 7) return "Can\u2019t connect to " + providerLabel
+    if (exitCode === 28) return providerLabel + " took too long to answer"
+    if (exitCode === 35 || exitCode === 60) return "Secure connection to " + providerLabel + " failed"
+    return "Couldn\u2019t reach " + providerLabel + " (curl error " + exitCode + ")"
   }
 
   function applyResults(raw, exitCode) {
@@ -290,9 +302,22 @@ Item {
 
     if (exitCode !== 0 || !raw) {
       if (!append) root.items = []
-      root.errorText = exitCode === 22
-        ? providerLabel + " rejected the request — check the API key in " + shortConfigPath()
-        : "Could not reach " + providerLabel + " (curl exit " + exitCode + ")"
+      // An HTTP error still carries the service's own JSON, which explains the
+      // failure better than anything we could guess at.
+      var parsed = raw ? Providers.parse(root.provider, raw, cursorAtStart) : null
+      var reported = parsed ? parsed.error : ""
+      var status = parsed && parsed.status ? parsed.status : 0
+      if (exitCode === 22) {
+        var base = reported ? providerLabel + ": " + reported
+                            : providerLabel + " rejected the request"
+        // Being over quota is not a reason to go looking at your API key.
+        if (status === 429) root.errorText = base + " — try again in a minute"
+        else if (status === 0 || status === 401 || status === 403)
+          root.errorText = base + " — check the API key in " + shortConfigPath()
+        else root.errorText = base
+      } else {
+        root.errorText = reported || root.curlMessage(exitCode)
+      }
       return
     }
 
@@ -624,6 +649,9 @@ Item {
             event.accepted = true
           } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
             if (!root.configured) root.launchSetup("")
+            // A failed search leaves nothing to act on, so Enter means "try
+            // that again" rather than doing nothing at all.
+            else if (root.errorText && root.items.length === 0) root.requestSearch()
             else if (!root.cursorActive && root.items.length > 0) root.cursorActive = true
             else if (ctrl) root.runAction("paste-url")
             else if (shift) root.runAction("copy-url")
@@ -845,6 +873,18 @@ Item {
               font.pixelSize: Style.font.title
               horizontalAlignment: Text.AlignHCenter
               wrapMode: Text.WordWrap
+              width: parent.width
+            }
+
+            Text {
+              textFormat: Text.PlainText
+              visible: root.configured && root.errorText.length > 0
+              text: "Press Enter to try again"
+              color: root.foreground
+              opacity: 0.55
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              horizontalAlignment: Text.AlignHCenter
               width: parent.width
             }
 

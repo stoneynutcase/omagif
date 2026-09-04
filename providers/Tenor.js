@@ -93,7 +93,8 @@ function parse(raw, previousCursor) {
   }
 
   if (isObject(payload) && isObject(payload.error))
-    return { items: [], next: "", error: trimmed(payload.error.message) || "Request rejected" }
+    return { items: [], next: "", status: parseInt(payload.error.code, 10) || 0,
+             error: trimmed(payload.error.message) || "Request rejected" }
 
   var raws = Array.isArray(payload.results) ? payload.results : []
   var items = []
