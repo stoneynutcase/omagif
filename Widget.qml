@@ -56,7 +56,7 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰴾"
+    text: "󰥶"
     tooltipText: "Search GIFs"
     active: root.opened
     onPressed: function(b) {
