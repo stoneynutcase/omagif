@@ -271,12 +271,17 @@ plugin code on save — but that applies to **`.qml` files only**:
 
 | Changed | Takes effect |
 | --- | --- |
-| `Omagif.qml`, `Widget.qml` | on save (close and reopen the overlay) |
+| `Omagif.qml` | on save (close and reopen the overlay) |
+| **`Widget.qml`** | **only after `omarchy restart shell`** |
 | **`Providers.js`, `providers/*.js`** | **only after `omarchy restart shell`** |
 | `providers/index.json` | on save, via a watching `FileView` |
 | `bin/*`, `setup` | immediately — scripts are re-read per invocation |
 | `~/.config/omagif/config.json` | on save, via a watching `FileView` |
 | `manifest.json` | `omarchy-shell shell rescanPlugins` |
+
+The bar widget is the surprise: a plugin reload recreates the overlay but
+leaves the widget already mounted in the bar, so an edited icon or tooltip
+keeps showing the old one while the file on disk plainly says otherwise.
 
 The `.js` case is the one that bites: `import "Providers.js" as Providers`
 leaves the compiled JS in the QML engine's cache, and neither a plugin reload
