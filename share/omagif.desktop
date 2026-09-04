@@ -2,7 +2,7 @@
 Type=Application
 Name=Omagif
 GenericName=GIF Picker
-Comment=Search Tenor or Giphy and copy a GIF to the clipboard
+Comment=Search Giphy and paste a GIF into the window you were typing in
 Exec=omagif toggle
 Icon=image-x-generic
 Terminal=false
