@@ -5,7 +5,7 @@
 # Every GIF service needs a free API key — none offers keyless search any more
 # — so the picker can't do anything until one is configured. This walks through
 # picking a service, getting a key, checking that the key actually works, and
-# writing ~/.config/omarchy/omagif.json.
+# writing ~/.config/omagif/config.json.
 #
 # The list of services, where to get their keys, and how to verify one all come
 # from providers/index.json, the same catalogue the picker reads. Adding a
@@ -23,7 +23,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ID="stoneynutcase.omagif"
 CATALOGUE="$SCRIPT_DIR/providers/index.json"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-CONFIG="$CONFIG_HOME/omarchy/omagif.json"
+CONFIG="$CONFIG_HOME/omagif/config.json"
 BINDINGS="$CONFIG_HOME/hypr/bindings.lua"
 KEYBIND_KEYS="SUPER + SHIFT + PERIOD"
 KEYBIND="o.bind(\"$KEYBIND_KEYS\", \"GIF picker\", \"omarchy-shell shell toggle $PLUGIN_ID\")"

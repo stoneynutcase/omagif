@@ -36,7 +36,7 @@ You can run the same flow from a terminal yourself:
 
 Setup checks the dependencies, opens the page where you get a key, verifies
 the key you paste against the live API before saving it, writes
-`~/.config/omarchy/omagif.json`, and then offers to enable the plugin, link
+`~/.config/omagif/config.json`, and then offers to enable the plugin, link
 the `omagif` command into `~/.local/bin`, and add the keybinding. Everything
 after the key is asked for, not assumed. Run it again any time to change
 services or replace a key — or press `Ctrl+,` inside the picker.
@@ -151,7 +151,7 @@ Change the default with `enterAction` — `"link"`, `"paste"`, `"file"`, or
 
 ## Configuration
 
-`~/.config/omarchy/omagif.json`, hot-reloaded on save:
+`~/.config/omagif/config.json`, hot-reloaded on save:
 
 ```json
 {
@@ -163,6 +163,13 @@ Change the default with `enterAction` — `"link"`, `"paste"`, `"file"`, or
   "saveDir": "~/Pictures/gifs"
 }
 ```
+
+Settings live in their own directory rather than in
+`~/.config/omarchy/shell.json`, which is where Omarchy's first-party widgets
+keep theirs. Two reasons: `~/.config/omarchy/` belongs to Omarchy itself, and
+`shell.json` is mode 644, gets pasted into bug reports, shared as dotfiles, and
+rewritten wholesale by `omarchy refresh shell` — no place for an API key. This
+file is written mode 600 and is ours alone.
 
 | Key | Meaning |
 | --- | --- |
@@ -268,7 +275,7 @@ plugin code on save — but that applies to **`.qml` files only**:
 | **`Providers.js`, `providers/*.js`** | **only after `omarchy restart shell`** |
 | `providers/index.json` | on save, via a watching `FileView` |
 | `bin/*`, `setup` | immediately — scripts are re-read per invocation |
-| `~/.config/omarchy/omagif.json` | on save, via a watching `FileView` |
+| `~/.config/omagif/config.json` | on save, via a watching `FileView` |
 | `manifest.json` | `omarchy-shell shell rescanPlugins` |
 
 The `.js` case is the one that bites: `import "Providers.js" as Providers`

@@ -21,7 +21,7 @@ Item {
   readonly property string sourceDir: (manifest && manifest.__sourceDir)
     || (home + "/.config/omarchy/plugins/stoneynutcase.omagif")
   readonly property string actionBin: sourceDir + "/bin/omagif-action"
-  readonly property string configPath: home + "/.config/omarchy/omagif.json"
+  readonly property string configPath: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omagif/config.json"
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/omagif"
 
   property bool opened: false
@@ -312,7 +312,7 @@ Item {
   }
 
   function shortConfigPath() {
-    return "~/.config/omarchy/omagif.json"
+    return "~/.config/omagif/config.json"
   }
 
   function notePreview(url, path) {
