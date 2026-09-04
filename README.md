@@ -76,6 +76,30 @@ With two providers configured, `Ctrl+P` switches between them for the session.
 o.bind("SUPER + SHIFT + PERIOD", "GIF picker", "omarchy-shell shell toggle stoneynutcase.omagif")
 ```
 
+## Removing it
+
+```bash
+omarchy plugin remove stoneynutcase.omagif
+```
+
+That takes the plugin directory and nothing else. Everything setup asked
+permission to create lives outside it, and none of it is reached by removing
+the plugin:
+
+```bash
+rm -rf ~/.config/omagif                             # config — including your API key
+rm -rf ~/.cache/omagif ~/.local/state/omagif        # cached GIFs, search history, log
+rm -f  ~/.local/bin/omagif                          # the CLI symlink
+rm -f  ~/.local/share/applications/omagif.desktop   # the desktop entry
+```
+
+The keybinding is the one that isn't a file of ours: `setup` appended it to
+`~/.config/hypr/bindings.lua` under an `-- Omagif GIF picker` comment, so
+delete that comment and the `o.bind` line under it.
+
+GIFs you saved with `Ctrl+S` are left where they are, in `~/Pictures/gifs`.
+Removing a picker shouldn't take your pictures with it.
+
 ## Keys
 
 | Key | Action |

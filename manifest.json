@@ -5,7 +5,7 @@
   "version": "1.0.0",
   "author": "stoneynutcase",
   "license": "MIT",
-  "description": "Search Giphy and drop a GIF straight into the window you were typing in",
+  "description": "Search Giphy and drop a GIF straight onto your clipboard",
   "kinds": [
     "overlay",
     "bar-widget"
