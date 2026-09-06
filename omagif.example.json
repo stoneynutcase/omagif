@@ -9,6 +9,8 @@
     "lang": "en"
   },
 
+  "//giphy-keyless": "same service with no API key, by reading Giphy's public search page: ~25 results, no paging, and rating/lang below do not apply. Select it with \"provider\": \"giphy-keyless\" — it takes no settings of its own.",
+
   "//tenor": "closed to new sign-ups since Jan 2026; kept for existing keys",
   "tenor": {
     "apiKey": "",

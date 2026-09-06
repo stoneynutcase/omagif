@@ -15,7 +15,8 @@ running inside the long-lived `omarchy-shell` process, themed from the same
 
 - Omarchy 4.x (the manifest-based shell plugin system)
 - `curl`, `wl-clipboard`, `wtype`, `python3` — all present on a stock Omarchy
-- A free API key from [Giphy](https://developers.giphy.com/dashboard/)
+- Optionally, a free API key from [Giphy](https://developers.giphy.com/dashboard/) —
+  there is a no-key option, with [trade-offs](#searching-without-an-api-key)
 
 ## Install
 
@@ -31,7 +32,8 @@ You can run the same flow from a terminal yourself:
 
 ```bash
 ~/.config/omarchy/plugins/stoneynutcase.omagif/setup                    # asks, if there's a choice
-~/.config/omarchy/plugins/stoneynutcase.omagif/setup --provider giphy   # straight to one
+~/.config/omarchy/plugins/stoneynutcase.omagif/setup --provider giphy          # straight to one
+~/.config/omarchy/plugins/stoneynutcase.omagif/setup --provider giphy-keyless  # no key at all
 ```
 
 Setup checks the dependencies, opens the page where you get a key, verifies
@@ -41,15 +43,37 @@ the `omagif` command into `~/.local/bin`, and add the keybinding. Everything
 after the key is asked for, not assumed. Run it again any time to change
 services or replace a key — or press `Ctrl+,` inside the picker.
 
-### Why a key is needed
+### Searching without an API key
 
-There is no keyless option left — no GIF service offers unauthenticated search
-any more. Giphy without a key returns `401`. The key is free and takes about a
-minute.
+Setup offers **Giphy (no API key)** alongside the regular Giphy provider. It
+needs no sign-up and nothing to paste — pick it and search.
+
+It works by reading Giphy's public search page rather than its API, because the
+API authenticates every request and the old public beta key (`dc6zaTOxFJmzC`)
+now answers `403 BANNED`. giphy.com renders its result grid server-side, one
+anchor per GIF carrying the id, the share link, the tile's aspect ratio and a
+title, which is enough to build the same picker. Only the ids are reused: the
+media URLs in that markup embed a `cid` scoped to the request that produced
+them and `403` for anyone you send them to, so links are rebuilt from the id
+and stay shareable.
+
+What you give up against a key:
+
+| | With a Giphy key | No key |
+|---|---|---|
+| Results per search | 40, scroll for more | ~25, no second page |
+| Rating / language filter | `rating`, `lang` | whatever the page decides |
+| Stability | a versioned API | scraped markup — a redesign breaks it |
+
+The failure mode is worth knowing: if Giphy changes that page, every search
+starts reporting no results. The picker says as much when it finds nothing, and
+adding a key switches you to the full provider. With both configured, `Ctrl+P`
+flips between them.
 
 ### Providers
 
-Giphy is the only service offered today. **Tenor is present but disabled**:
+Giphy is the only service offered today, keyed or keyless. **Tenor is present
+but disabled**:
 Google stopped accepting new Tenor API clients in January 2026, so a fresh
 install has no way to obtain a key. Its `v2` endpoint still serves *existing*
 keys — it validates them and answers normally — so the module is kept intact
@@ -116,7 +140,7 @@ Removing a picker shouldn't take your pictures with it.
 | `Alt+Enter` | copy the GIF's raw bytes as `image/gif` |
 | `Ctrl+S` | save the GIF to `~/Pictures/gifs` |
 | `Ctrl+O` | open the GIF's page in your browser |
-| `Ctrl+P` | switch provider for this session (needs both keys configured) |
+| `Ctrl+P` | switch provider for this session (needs two that can search) |
 | `Ctrl+,` | reopen setup in a terminal to change service or key |
 | `Backspace` / `Ctrl+U` | delete a character / clear the search (wipes the whole query when it's selected) |
 | `Esc` | clear the search, then close |
@@ -313,6 +337,48 @@ nor `rescanPlugins` evicts it. Edits to that file look like they did nothing —
 the overlay reloads, the log says so, and the old behaviour continues. If a
 change to provider or URL logic seems to be ignored, restart the shell before
 debugging anything else.
+
+### Tests
+
+```bash
+node --test test/            # everything
+node --test test/registry.test.mjs   # offline only — no network needed
+```
+
+Node 18 or newer; there is nothing to install. `test/harness.mjs` loads the
+real `Providers.js` and `providers/*.js` by stripping their `.import` header —
+the one line the QML engine understands and node does not — so the tests
+exercise the shipped files rather than a copy that can drift.
+
+The suite is deliberately an *integration* suite. It talks to Giphy, because
+the failures worth catching are the ones Giphy causes:
+
+| File | Needs | Catches |
+| --- | --- | --- |
+| `registry.test.mjs` | nothing | a provider missing from the catalogue or the module registry, a keyless entry with no caveat, broken URL building |
+| `keyless.test.mjs` | network | **Giphy changing its search page** — the parse yields nothing while the request still returns `200` |
+| `keyed.test.mjs` | `GIPHY_API_KEY` | the API changing shape, renditions disappearing, offset paging breaking |
+
+Set `GIPHY_API_KEY` to run the keyed tests locally; without it they skip rather
+than fail. One test there needs no key at all — it checks that a *rejected* key
+is reported with its status, which is what the picker keys its "check the API
+key" advice off.
+
+### The daily run
+
+[`.github/workflows/integration.yml`](.github/workflows/integration.yml) runs
+the whole suite every morning, plus on pull requests that touch provider code.
+The daily schedule is the point: the keyless provider reads markup Giphy never
+promised to keep, so that breakage arrives on Giphy's timetable, not on ours.
+A failed scheduled run opens (or comments on) an issue, since nobody is
+watching a cron.
+
+It needs one repository secret, **`GIPHY_API_KEY`** — Settings → Secrets and
+variables → Actions. The keyless job needs no secret, so it still does its job
+on pull requests from forks, where secrets are withheld.
+
+Note that GitHub only runs scheduled workflows from the **default branch**, so
+the daily run starts once this is on `main`.
 
 ## License
 

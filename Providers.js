@@ -1,4 +1,5 @@
 .import "providers/Giphy.js" as GiphyModule
+.import "providers/GiphyKeyless.js" as GiphyKeylessModule
 .import "providers/Tenor.js" as TenorModule
 
 // Provider registry and shared config accessors.
@@ -18,6 +19,7 @@ function modules() {
   if (!MODULES) {
     MODULES = {}
     MODULES[GiphyModule.id] = GiphyModule
+    MODULES[GiphyKeylessModule.id] = GiphyKeylessModule
     MODULES[TenorModule.id] = TenorModule
   }
   return MODULES
@@ -61,6 +63,20 @@ function providerLabel(catalogue, id) {
   return entry ? trimmed(entry.label) || trimmed(entry.id) : trimmed(id)
 }
 
+// A keyless provider reaches its service without credentials — it is ready the
+// moment it is selected, and setup never asks for a key. See
+// providers/GiphyKeyless.js for what that costs.
+function isKeyless(catalogue, id) {
+  var entry = entryFor(catalogue, id)
+  return !!(entry && entry.keyless === true)
+}
+
+// Whether searching can actually start. For everything else that means holding
+// a key; for a keyless provider there is nothing to hold.
+function isConfigured(config, catalogue, id) {
+  return isKeyless(catalogue, id) || apiKey(config, id).length > 0
+}
+
 // A provider is offerable when the catalogue still lists it as enabled, or
 // when this user already holds a key for it — a service that stops issuing new
 // keys shouldn't break the setup of someone who got one while they could.
@@ -88,13 +104,14 @@ function providerName(config, catalogue) {
   return usable.length > 0 ? usable[0] : configured
 }
 
-// Next provider the Ctrl+P switch should land on: only ones with a key, since
-// switching to a keyless provider would just empty the grid.
+// Next provider the Ctrl+P switch should land on: only ones that can search
+// right now, since switching to an unconfigured provider would just empty the
+// grid. That means holding a key, or needing no key at all.
 function nextProvider(config, catalogue, current) {
   var ready = []
   var usable = usableProviders(config, catalogue)
   for (var i = 0; i < usable.length; i++) {
-    if (apiKey(config, usable[i]).length > 0) ready.push(usable[i])
+    if (isConfigured(config, catalogue, usable[i])) ready.push(usable[i])
   }
   if (ready.length < 2) return ""
   var at = ready.indexOf(trimmed(current))
@@ -202,11 +219,13 @@ function urlFor(item, verb, config, id) {
 
 // ------------------------------------------------------------------ dispatch
 
-function searchUrl(config, id, searchTerm, cursor) {
+function searchUrl(config, catalogue, id, searchTerm, cursor) {
   var module = modules()[trimmed(id)]
   if (!module) return ""
   var key = apiKey(config, id)
-  if (!key) return ""
+  // A keyless provider is handed "" and ignores it; everything else has
+  // nothing to ask with until a key is saved.
+  if (!key && !isKeyless(catalogue, id)) return ""
   return module.searchUrl(key, section(config, id), searchTerm, limit(config), cursor)
 }
 

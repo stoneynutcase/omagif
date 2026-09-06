@@ -75,6 +75,30 @@ the provider id, and reach your module as `settings`:
 { "example": { "apiKey": "…", "rating": "pg-13" } }
 ```
 
+## Providers that need no key
+
+Add `"keyless": true` and setup stops asking for one: no key page, no paste, no
+verify step, and nothing seeded into the config section. The picker treats the
+provider as ready the moment it is selected, and `searchUrl()` is handed `""`
+as its key, which it should ignore.
+
+```json
+{
+  "id": "example-keyless",
+  "label": "Example (no API key)",
+  "enabled": true,
+  "keyless": true,
+  "caveat": "What this costs, in one sentence — setup prints it and asks."
+}
+```
+
+`caveat` is the honest-trade-off line. Keyless providers tend to reach a
+service by a route it did not design for you, so say what breaks: fewer
+results, no filters, or a page layout that can change under you.
+`GiphyKeyless.js` is the worked example — it scrapes giphy.com's server-side
+grid, returns one page, and always reports the results exhausted by handing
+back `next: ""`.
+
 ## Disabling one
 
 Set `"enabled": false` and add a `disabledReason`. It disappears from setup and
