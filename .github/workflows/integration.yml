@@ -70,8 +70,11 @@ jobs:
       - name: Shell scripts
         run: node --test --test-reporter=spec test/shell.test.mjs
 
-      - name: Live keyless search
+      - name: Live keyless search (Giphy)
         run: node --test --test-reporter=spec test/keyless.test.mjs
+
+      - name: Live keyless search (Tenor)
+        run: node --test --test-reporter=spec test/tenor-keyless.test.mjs
 
   keyed:
     name: Keyed (Giphy API)
@@ -111,10 +114,10 @@ jobs:
               "",
               "Where to look first:",
               "",
-              "- **Keyless** reads giphy.com's public search page. If that job failed, Giphy has",
-              "  most likely changed the markup `providers/GiphyKeyless.js` parses — it looks for",
-              "  anchors carrying `data-giphy-id`. Users on the no-key provider will be seeing",
-              "  \"no results\" for every search.",
+              "- **Keyless** reads the public search pages of giphy.com and tenor.com. If that",
+              "  job failed, check which step: Giphy looks for anchors carrying `data-giphy-id`,",
+              "  Tenor for `<figure class=\"UniversalGifListItem\">` wrapping a `/view/` link.",
+              "  Users on that no-key provider will be seeing \"no results\" for every search.",
               "- **Keyed** calls the Giphy API with the `GIPHY_API_KEY` secret. If that job failed,",
               "  check the key is still valid and in quota before suspecting the code.",
             ].join("\n");

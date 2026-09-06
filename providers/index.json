@@ -27,6 +27,15 @@
       "keyUrl": "https://developers.google.com/tenor/guides/quickstart",
       "keyHint": "Create a Google Cloud project, enable the Tenor API, then make an API key.",
       "verifyUrl": "https://tenor.googleapis.com/v2/featured?key={key}&client_key=omagif&limit=1"
+    },
+    {
+      "id": "tenor-keyless",
+      "label": "Tenor (no API key)",
+      "enabled": true,
+      "keyless": true,
+      "caveat": "Reads Tenor's public search page instead of its API — the only way a new install can use Tenor at all, since Google stopped issuing API keys in January 2026. In exchange: about 49 results per search with no scrolling for more, no content filter, noticeably heavier GIFs than Giphy, and it stops working if Tenor redesigns that page.",
+      "keyHint": "Nothing to do — this provider needs no key.",
+      "verifyUrl": ""
     }
   ]
 }

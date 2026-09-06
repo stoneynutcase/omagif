@@ -1,6 +1,7 @@
 .import "providers/Giphy.js" as GiphyModule
 .import "providers/GiphyKeyless.js" as GiphyKeylessModule
 .import "providers/Tenor.js" as TenorModule
+.import "providers/TenorKeyless.js" as TenorKeylessModule
 
 // Provider registry and shared config accessors.
 //
@@ -21,6 +22,7 @@ function modules() {
     MODULES[GiphyModule.id] = GiphyModule
     MODULES[GiphyKeylessModule.id] = GiphyKeylessModule
     MODULES[TenorModule.id] = TenorModule
+    MODULES[TenorKeylessModule.id] = TenorKeylessModule
   }
   return MODULES
 }

@@ -36,19 +36,25 @@ service or key, or press `Ctrl+,` inside the picker.
 
 ### Searching without an API key
 
-Setup offers **Giphy (no API key)** alongside the regular Giphy provider. It
-needs no sign-up — pick it and search. It reads Giphy's public search page
-instead of the API, which costs you:
+Setup offers two no-key providers — **Giphy (no API key)** and **Tenor (no API
+key)**. Neither needs a sign-up: pick one and search. `Ctrl+P` swaps between
+whatever you have set up, so you can run both with no key at all.
 
-| | With a Giphy key | No key |
+Tenor is the notable one: Google stopped issuing Tenor API keys in January
+2026, so this is the only way a new install can use Tenor.
+
+They read each service's public search page instead of its API, which costs
+you:
+
+| | With an API key | No key |
 |---|---|---|
-| Results per search | 40, scroll for more | ~25, no second page |
-| Rating / language filter | `rating`, `lang` | whatever the page decides |
+| Results per search | 40, scroll for more | ~25 (Giphy) / ~49 (Tenor), no second page |
+| Filters | `rating`, `lang` | whatever the page decides |
+| File sizes | you pick the rendition | Tenor's GIFs are markedly heavier |
 | Stability | a versioned API | scraped page — a redesign breaks it |
 
-If Giphy ever changes that page, every search starts saying it found nothing.
-Adding a key switches you to the full provider; with both set up, `Ctrl+P`
-flips between them.
+If a service changes its page, that provider starts saying it found nothing.
+The picker says so, and `Ctrl+P` moves you to another provider.
 
 ## Keys
 
@@ -113,7 +119,7 @@ Slack.
 
 | Key | Meaning |
 | --- | --- |
-| `provider` | which service to search: `giphy`, `giphy-keyless` |
+| `provider` | which service to search: `giphy`, `giphy-keyless`, `tenor-keyless` |
 | `<provider>.apiKey` | your key; the picker says so plainly when it's missing |
 | `giphy.rating` | `g`, `pg`, `pg-13`, `r` |
 | `enterAction` | what `Enter` and left-click do: `file`, `link`, `paste`, `image` |
