@@ -61,7 +61,7 @@ The picker says so, and `Ctrl+P` moves you to another provider.
 | Key | Action |
 | --- | --- |
 | type | search (empty search shows what's trending) |
-| `Tab` | select the whole query, so the next keystroke replaces it |
+| `Tab` | select the whole query — type to replace it, or `Delete` to clear it |
 | `Ctrl+Up` / `Ctrl+Down` | walk back and forward through past searches |
 | `Ctrl+Delete` | forget every remembered search |
 | `←` `→` `↑` `↓` | move around the grid |
@@ -74,11 +74,15 @@ The picker says so, and `Ctrl+P` moves you to another provider.
 | `Ctrl+O` | open the GIF's page in your browser |
 | `Ctrl+P` | switch provider for this session |
 | `Ctrl+,` | reopen setup to change service or key |
-| `Backspace` / `Ctrl+U` | delete a character / clear the search |
-| `Esc` | clear the search, then close |
+| `Backspace` | delete a character |
+| `Esc` | close the picker |
 
 Left-click does the `Enter` action, middle-click copies the link, right-click
 opens the page.
+
+Your search is never cleared behind your back: `Esc` closes the picker and
+leaves the query alone, so it is still there next time. The one thing that
+empties it is `Tab` then `Delete`.
 
 ### What Enter copies
 

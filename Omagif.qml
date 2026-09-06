@@ -153,12 +153,15 @@ Item {
     debounce.restart()
   }
 
-  function clearFilter() {
-    root.filterText = ""
-    root.filterSelected = false
-    root.exitHistory()
-    debounce.stop()
-    root.requestSearch()
+  // One Backspace removes one character, which is not the same as dropping the
+  // last UTF-16 code unit: an emoji is a surrogate pair, and halving it leaves
+  // an unpaired unit that renders as a replacement glyph.
+  function backspace(text) {
+    var end = text.length - 1
+    if (end <= 0) return ""
+    var last = text.charCodeAt(end)
+    if (last >= 0xDC00 && last <= 0xDFFF) end--
+    return text.slice(0, end)
   }
 
   function selectFilter() {
@@ -600,9 +603,12 @@ Item {
           var alt = (event.modifiers & Qt.AltModifier) !== 0
 
           if (event.key === Qt.Key_Escape) {
-            if (root.filterSelected) root.filterSelected = false
-            else if (root.filterText) root.clearFilter()
-            else root.dismiss()
+            // Esc closes, whatever is in the search box. It used to clear the
+            // query first, which meant two or three presses to shut a picker
+            // you had actually finished with. The query survives the close and
+            // is still there next time — the only thing that empties it is
+            // Tab then Delete.
+            root.dismiss()
             event.accepted = true
           } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
             // Accepted either way, so Tab never wanders off into focus
@@ -614,6 +620,14 @@ Item {
             // Plain Delete on a selected query wipes the query; Ctrl+Delete is
             // a different verb entirely, handled below.
             root.setFilter("")
+            event.accepted = true
+          } else if (!ctrl && event.key === Qt.Key_Backspace) {
+            // Nothing selected: trim the last character. Without this branch
+            // Backspace fell through unhandled — the selected-query case above
+            // was the only one that read it, and the printable-text case below
+            // ignores anything under U+0020 — so a typo could not be fixed,
+            // only typed around or wiped wholesale.
+            if (root.filterText) root.setFilter(root.backspace(root.filterText))
             event.accepted = true
           } else if (ctrl && event.key === Qt.Key_S) {
             root.runAction("save")
