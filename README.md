@@ -22,7 +22,11 @@ omarchy plugin add https://github.com/stoneynutcase/omagif --enable
 
 That's the whole install. The first time you open the picker it shows a
 **Set up** button per available service, which opens setup in a floating
-terminal. You can run it yourself too:
+terminal.
+
+![First run](first-run.png)
+
+You can run it yourself too:
 
 ```bash
 omagif setup                          # asks which service
