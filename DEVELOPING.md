@@ -181,14 +181,18 @@ printed rather than on its exit status.
 
 [`.github/workflows/integration.yml`](.github/workflows/integration.yml) runs
 the suite every morning, plus on pull requests that touch provider or script
-code. It runs as four jobs so a red check names the cause on its own:
+code. One job per service surface, so a red check names the cause on its own:
 
 | Job | Fails when |
 | --- | --- |
-| Catalogue, registry and scripts | the plugin's own wiring broke — no network involved |
-| Keyless — giphy.com | Giphy changed its search page |
-| Keyless — tenor.com | Tenor changed its search page |
-| Keyed — Giphy API | the API changed, or the key is revoked or over quota | The daily schedule is the point: the keyless provider reads markup Giphy
+| Giphy (Search) | Giphy changed its search page |
+| Giphy (API) | the API changed, or the key is revoked or over quota |
+| Tenor (Search) | Tenor changed its search page |
+
+The offline tests live in a separate [`Checks`](.github/workflows/checks.yml)
+workflow — they ask whether the plugin's own wiring is intact rather than
+whether a service moved, and they run on every pull request, including ones
+that never touch a provider. The daily schedule is the point: the keyless provider reads markup Giphy
 never promised to keep, so that breakage arrives on Giphy's timetable, not on
 ours. A failed scheduled run opens (or comments on) an issue, since nobody is
 watching a cron.

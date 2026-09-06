@@ -47,30 +47,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  offline:
-    name: Catalogue, registry and scripts
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "22"
-
-      # No network. Fast, and it localises a failure — if this passes and a
-      # live job does not, the plugin is fine and the service moved.
-      - name: Catalogue and registry
-        run: node --test --test-reporter=spec test/registry.test.mjs
-
-      # Covers the shell scripts, which the provider tests do not touch —
-      # including running the CLI through a symlink, the way `omagif install`
-      # sets it up.
-      - name: Shell scripts
-        run: node --test --test-reporter=spec test/shell.test.mjs
-
   giphy-keyless:
-    name: Keyless — giphy.com
+    name: Giphy (Search)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -84,7 +62,7 @@ jobs:
         run: node --test --test-reporter=spec test/keyless.test.mjs
 
   tenor-keyless:
-    name: Keyless — tenor.com
+    name: Tenor (Search)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -98,7 +76,7 @@ jobs:
         run: node --test --test-reporter=spec test/tenor-keyless.test.mjs
 
   keyed:
-    name: Keyed — Giphy API
+    name: Giphy (API)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -115,7 +93,7 @@ jobs:
 
   report:
     name: Report a broken daily run
-    needs: [offline, giphy-keyless, tenor-keyless, keyed]
+    needs: [giphy-keyless, keyed, tenor-keyless]
     # Only for the unattended run. A failure on a push or a pull request is
     # already in front of whoever caused it.
     if: failure() && github.event_name == 'schedule'
