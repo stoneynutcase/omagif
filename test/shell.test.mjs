@@ -76,6 +76,19 @@ function configHome(config) {
   return dir
 }
 
+// An isolated state directory. Every `doctor` call needs one: doctor reads the
+// remembered provider from XDG_STATE_HOME, so a test that leaves it unset
+// reads the developer's own swap and passes or fails according to whatever
+// they last pressed Ctrl+P on.
+function stateHome(saved) {
+  const dir = mkdtempSync(join(tmpdir(), "omagif-state-"))
+  mkdirSync(join(dir, "omagif"))
+  if (saved) {
+    writeFileSync(join(dir, "omagif", "provider.json"), JSON.stringify({ provider: saved }))
+  }
+  return dir
+}
+
 describe("the CLI works through its symlink", () => {
   test("`omagif setup` finds setup instead of a path beside the link", () => {
     const { link } = linkedCli()
@@ -95,7 +108,9 @@ describe("the CLI works through its symlink", () => {
     // doctor exits non-zero on a runner with no wl-copy/wtype/omarchy, so the
     // check is on what it printed. With ROOT_DIR wrong the catalogue read
     // yields nothing and no provider line is emitted at all.
-    const { stdout } = run(link, ["doctor"], { env: { ...process.env, XDG_CONFIG_HOME: home } })
+    const { stdout } = run(link, ["doctor"], {
+      env: { ...process.env, XDG_CONFIG_HOME: home, XDG_STATE_HOME: stateHome() }
+    })
     assert.match(stdout, /provider giphy-keyless/, `doctor did not read the config:\n${stdout}`)
     assert.match(
       stdout,
@@ -108,7 +123,9 @@ describe("the CLI works through its symlink", () => {
   test("doctor does not call a keyless provider's missing key a fault", () => {
     const { link } = linkedCli()
     const home = configHome({ provider: "giphy-keyless", "giphy-keyless": {} })
-    const { stdout } = run(link, ["doctor"], { env: { ...process.env, XDG_CONFIG_HOME: home } })
+    const { stdout } = run(link, ["doctor"], {
+      env: { ...process.env, XDG_CONFIG_HOME: home, XDG_STATE_HOME: stateHome() }
+    })
     // Assert the line exists before asserting what it does not say — with no
     // catalogue at all there is no "absent" line either, and this would pass
     // for entirely the wrong reason.
@@ -151,15 +168,6 @@ describe("setup", () => {
 // choosing a service in setup outranks it — without which setup would appear
 // to do nothing for anyone who had ever pressed Ctrl+P.
 describe("the remembered provider", () => {
-  function stateHome(saved) {
-    const dir = mkdtempSync(join(tmpdir(), "omagif-state-"))
-    mkdirSync(join(dir, "omagif"))
-    if (saved) {
-      writeFileSync(join(dir, "omagif", "provider.json"), JSON.stringify({ provider: saved }))
-    }
-    return dir
-  }
-
   const config = { provider: "giphy", giphy: { apiKey: "kkkkkkkk" }, limit: 40, columns: 4 }
 
   test("doctor reports the config's provider when nothing was swapped", () => {

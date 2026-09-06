@@ -87,6 +87,12 @@ Item {
   // model and restarts every animation in the grid.
   property var previewCache: ({})
   property string nextCursor: ""
+  // The provider a request was built for. A response must be handed to the
+  // module that produced its URL: Ctrl+P, a config reload or a restored swap
+  // can all change `provider` while curl is still running, and parsing HTML
+  // with the Giphy API module yields "Unreadable response from Giphy" rather
+  // than results.
+  property string searchProvider: ""
   property bool loading: false
   property bool appending: false
   property string errorText: ""
@@ -294,8 +300,10 @@ Item {
       root.loading = false
       return
     }
-    var url = Providers.searchUrl(config, catalogue, root.provider, root.filterText.trim(), append ? root.nextCursor : "")
+    var provider = root.provider
+    var url = Providers.searchUrl(config, catalogue, provider, root.filterText.trim(), append ? root.nextCursor : "")
     if (!url) return
+    root.searchProvider = provider
     root.appending = append
     root.loading = true
     // --fail-with-body, not -f: both make an HTTP error a non-zero exit, but
@@ -308,44 +316,47 @@ Item {
 
   // curl exit codes are diagnostic, not something to put in front of a
   // person. These are the ones a GIF search realistically hits.
-  function curlMessage(exitCode) {
-    if (exitCode === 6) return "Can\u2019t reach " + providerLabel + " \u2014 you appear to be offline"
-    if (exitCode === 7) return "Can\u2019t connect to " + providerLabel
-    if (exitCode === 28) return providerLabel + " took too long to answer"
-    if (exitCode === 35 || exitCode === 60) return "Secure connection to " + providerLabel + " failed"
-    return "Couldn\u2019t reach " + providerLabel + " (curl error " + exitCode + ")"
+  function curlMessage(exitCode, label) {
+    if (exitCode === 6) return "Can\u2019t reach " + label + " \u2014 you appear to be offline"
+    if (exitCode === 7) return "Can\u2019t connect to " + label
+    if (exitCode === 28) return label + " took too long to answer"
+    if (exitCode === 35 || exitCode === 60) return "Secure connection to " + label + " failed"
+    return "Couldn\u2019t reach " + label + " (curl error " + exitCode + ")"
   }
 
   function applyResults(raw, exitCode) {
     var append = root.appending
     var cursorAtStart = append ? root.nextCursor : ""
+    // Name the service the request actually went to, which is not necessarily
+    // the one selected by the time it came back.
+    var label = Providers.providerLabel(root.catalogue, root.searchProvider)
 
     if (exitCode !== 0 || !raw) {
       if (!append) root.items = []
       // An HTTP error still carries the service's own JSON, which explains the
       // failure better than anything we could guess at.
-      var parsed = raw ? Providers.parse(root.provider, raw, cursorAtStart) : null
+      var parsed = raw ? Providers.parse(root.searchProvider, raw, cursorAtStart) : null
       var reported = parsed ? parsed.error : ""
       var status = parsed && parsed.status ? parsed.status : 0
       if (exitCode === 22) {
-        var base = reported ? providerLabel + ": " + reported
-                            : providerLabel + " rejected the request"
+        var base = reported ? label + ": " + reported
+                            : label + " rejected the request"
         // Being over quota is not a reason to go looking at your API key.
         if (status === 429) root.errorText = base + " — try again in a minute"
         else if (status === 0 || status === 401 || status === 403)
           // Without a key there is nothing to check: a refusal is the page
           // itself saying no, which waiting usually clears.
-          root.errorText = base + (root.keyless
+          root.errorText = base + (Providers.isKeyless(root.catalogue, root.searchProvider)
             ? " — it may be throttling this machine; try again shortly"
             : " — check the API key in " + shortConfigPath())
         else root.errorText = base
       } else {
-        root.errorText = reported || root.curlMessage(exitCode)
+        root.errorText = reported || root.curlMessage(exitCode, label)
       }
       return
     }
 
-    var parsed = Providers.parse(root.provider, raw, cursorAtStart)
+    var parsed = Providers.parse(root.searchProvider, raw, cursorAtStart)
     if (parsed.error) {
       if (!append) root.items = []
       root.errorText = parsed.error
@@ -522,8 +533,10 @@ Item {
         root.errorText = shortConfigPath() + " is not valid JSON"
       }
       root.config = parsed
-      // Re-check the remembered swap against the config that just arrived: a
-      // key removed by hand should drop us back to a provider that works.
+      // Re-read the remembered swap alongside the config: ./setup clears it
+      // when it writes a provider, and this is how that is noticed. reload()
+      // lands on onLoaded or onLoadFailed, both of which re-apply it.
+      providerFile.reload()
       root.applySavedProvider()
       if (root.opened) root.requestSearch()
     }
@@ -552,10 +565,13 @@ Item {
   FileView {
     id: providerFile
     path: root.stateDir + "/provider.json"
-    watchChanges: true
     atomicWrites: true
     printErrors: false
-    onFileChanged: reload()
+    // Deliberately not watched. This file is written by Ctrl+P itself, and a
+    // watcher turned every swap into a write-reload round trip that briefly
+    // reset the override — long enough for an in-flight response to come back
+    // to the wrong parser. The only other writer is ./setup, which rewrites
+    // the config too, so configFile's own reload re-reads this alongside it.
     onLoaded: root.loadSavedProvider(text())
     // Absent on a fresh install, and removed by ./setup whenever it writes a
     // provider — both mean "no swap to restore".
