@@ -356,8 +356,16 @@ the failures worth catching are the ones Giphy causes:
 | File | Needs | Catches |
 | --- | --- | --- |
 | `registry.test.mjs` | nothing | a provider missing from the catalogue or the module registry, a keyless entry with no caveat, broken URL building |
+| `shell.test.mjs` | nothing | `setup` and `bin/omagif` breaking — syntax, the executable bit, and running the CLI **through its symlink**, which is how `omagif install` sets it up |
 | `keyless.test.mjs` | network | **Giphy changing its search page** — the parse yields nothing while the request still returns `200` |
 | `keyed.test.mjs` | `GIPHY_API_KEY` | the API changing shape, renditions disappearing, offset paging breaking |
+
+The symlink case has already bitten once: the CLI took the dirname of
+`${BASH_SOURCE[0]}` without resolving the link, so running it as `omagif` put
+`ROOT_DIR` at `~/.local`. `omagif setup` died on a path that did not exist and
+`omagif doctor` silently listed no providers at all. `doctor` exits non-zero on
+a machine with no omarchy or Wayland tools, so those tests assert on what it
+printed rather than on its exit status.
 
 Set `GIPHY_API_KEY` to run the keyed tests locally; without it they skip rather
 than fail. One test there needs no key at all — it checks that a *rejected* key

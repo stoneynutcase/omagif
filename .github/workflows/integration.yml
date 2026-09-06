@@ -23,12 +23,18 @@ on:
       - "Providers.js"
       - "providers/**"
       - "test/**"
+      - "setup"
+      - "bin/**"
+      - "manifest.json"
       - ".github/workflows/integration.yml"
   pull_request:
     paths:
       - "Providers.js"
       - "providers/**"
       - "test/**"
+      - "setup"
+      - "bin/**"
+      - "manifest.json"
       - ".github/workflows/integration.yml"
 
 permissions:
@@ -57,6 +63,12 @@ jobs:
       # plugin is fine and Giphy moved.
       - name: Catalogue and registry
         run: node --test --test-reporter=spec test/registry.test.mjs
+
+      # Also offline. Covers the shell scripts, which the provider tests do
+      # not touch — including running the CLI through a symlink, the way
+      # `omagif install` sets it up.
+      - name: Shell scripts
+        run: node --test --test-reporter=spec test/shell.test.mjs
 
       - name: Live keyless search
         run: node --test --test-reporter=spec test/keyless.test.mjs
