@@ -6,7 +6,12 @@
 set -euo pipefail
 
 PLUGIN_ID="stoneynutcase.omagif"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolved through symlinks on purpose: `omagif install` links this script into
+# ~/.local/bin, so the common way to run it is through that link. Taking the
+# dirname of the link itself would put ROOT_DIR at ~/.local and every path
+# built from it — setup, the provider catalogue, the example config, the
+# desktop entry — would point at nothing.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/omagif/config.json"
 
@@ -125,9 +130,13 @@ do_doctor() {
       provider="${provider:-giphy}"
       echo "  provider $provider"
       # Ask the catalogue which providers exist rather than hardcoding a list.
-      while read -r id enabled; do
+      while read -r id enabled keyless; do
         [[ -n $id ]] || continue
-        if [[ -n "$(config_get "$id.apiKey")" ]]; then
+        if [[ $keyless == "True" ]]; then
+          # Nothing to check — a missing key here is the normal state, not a
+          # fault, so it must never be what makes doctor exit non-zero.
+          echo "  ok       $id needs no key"
+        elif [[ -n "$(config_get "$id.apiKey")" ]]; then
           echo "  ok       $id key present"
         elif [[ $enabled == "True" ]]; then
           echo "  absent   $id key"
@@ -142,7 +151,8 @@ except (OSError, ValueError):
     sys.exit(0)
 for entry in data.get("providers", []):
     if isinstance(entry, dict):
-        print(entry.get("id",""), entry.get("enabled") is True)' "$ROOT_DIR/providers/index.json")
+        print(entry.get("id",""), entry.get("enabled") is True,
+              entry.get("keyless") is True)' "$ROOT_DIR/providers/index.json")
     fi
   else
     echo "  MISSING  run: omagif setup"

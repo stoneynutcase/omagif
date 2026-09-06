@@ -170,8 +170,11 @@ done
 if ((${#missing[@]} > 0)); then
   echo
   echo "Missing: ${missing[*]}"
-  echo "On Omarchy these come from the wl-clipboard, wtype, curl and python packages:"
-  echo "  omarchy pkg add wl-clipboard wtype curl python"
+  # Names the packages but does not hand over a command to run. Omagif never
+  # installs anything: it is a plugin, the dependencies are stock Omarchy, and
+  # a picker has no business reaching outside its own checkout.
+  echo "On Omarchy these ship in the wl-clipboard, wtype, curl and python packages."
+  echo "Install whichever are missing with your usual package manager."
   fail "install the missing tools and run setup again"
 fi
 
@@ -185,7 +188,9 @@ if [[ -z $provider ]]; then
     provider="${offerable[0]%%$'\t'*}"
   else
     heading "Which GIF service should Omagif search?"
-    echo "  Each needs a free API key; none offers keyless search any more."
+    echo "  Giphy needs a free API key and gives you the full picker. The"
+    echo "  no-key option skips the sign-up and reads Giphy's public search"
+    echo "  page instead — fewer results, and easier to break."
     echo
     labels=()
     for row in "${offerable[@]}"; do labels+=("${row#*$'\t'}"); done
@@ -207,6 +212,8 @@ label="$(catalogue_field "$provider" label)"
 key_url="$(catalogue_field "$provider" keyUrl)"
 key_hint="$(catalogue_field "$provider" keyHint)"
 verify_template="$(catalogue_field "$provider" verifyUrl)"
+keyless="$(catalogue_field "$provider" keyless)"
+caveat="$(catalogue_field "$provider" caveat)"
 
 # A retired provider stays reachable for anyone who already holds a key, but
 # says so plainly first rather than sending someone to a dead sign-up page.
@@ -215,6 +222,17 @@ if [[ "$(catalogue_field "$provider" enabled)" != "true" ]]; then
   reason="$(catalogue_field "$provider" disabledReason)"
   [[ -n $reason ]] && note "$reason"
   confirm "Continue anyway? Only useful if you already have a key." || fail "aborted"
+fi
+
+# A keyless provider has nothing to paste, so the whole key section below is
+# skipped. What it does need is for the trade-off to be a decision rather than
+# a discovery three searches later.
+if [[ $keyless == true ]]; then
+  heading "$label"
+  [[ -n $caveat ]] && note "$caveat"
+  confirm "Set Omagif up this way?" yes || fail "aborted"
+  keep_existing=true
+  key=""
 fi
 
 # ------------------------------------------------------------------ existing
@@ -325,10 +343,10 @@ fi
 
 # Rewrites the whole document so hand-added settings (columns, saveDir, the
 # other provider's key) survive.
-python3 - "$CONFIG" "$provider" "${key:-}" <<'PY'
+python3 - "$CONFIG" "$provider" "${key:-}" "$keyless" <<'PY'
 import json, os, sys
 
-path, provider, key = sys.argv[1], sys.argv[2], sys.argv[3]
+path, provider, key, keyless = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 try:
     with open(path) as fh:
         data = json.load(fh)
@@ -343,7 +361,12 @@ if not isinstance(section, dict):
     section = {}
 if key:
     section["apiKey"] = key
-if provider == "tenor":
+if keyless == "true":
+    # Nothing to seed: a keyless provider reads a public page, which takes no
+    # key and honours no rating or language setting. Writing them would only
+    # suggest they do something.
+    pass
+elif provider == "tenor":
     section.setdefault("contentFilter", "medium")
     section.setdefault("locale", "en_US")
 else:

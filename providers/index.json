@@ -11,6 +11,15 @@
       "verifyUrl": "https://api.giphy.com/v1/gifs/trending?api_key={key}&limit=1"
     },
     {
+      "id": "giphy-keyless",
+      "label": "Giphy (no API key)",
+      "enabled": true,
+      "keyless": true,
+      "caveat": "Reads Giphy's public search page instead of its API, so there is nothing to sign up for. In exchange: about 25 results per search with no scrolling for more, no rating or language filter, and it stops working if Giphy redesigns that page. Add a Giphy API key for the full picker.",
+      "keyHint": "Nothing to do — this provider needs no key.",
+      "verifyUrl": ""
+    },
+    {
       "id": "tenor",
       "label": "Tenor",
       "enabled": false,

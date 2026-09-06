@@ -61,7 +61,10 @@ Item {
   property var catalogue: ({})
   readonly property string provider: providerOverride || Providers.providerName(config, catalogue)
   readonly property string providerLabel: Providers.providerLabel(catalogue, provider)
-  readonly property bool configured: Providers.apiKey(config, provider).length > 0
+  readonly property bool configured: Providers.isConfigured(config, catalogue, provider)
+  // Reaches its service without a key, so nothing about a key is worth saying
+  // to this user — not in the empty state, not when a request is refused.
+  readonly property bool keyless: Providers.isKeyless(catalogue, provider)
   // Ids offered on the first-run screen: enabled in the catalogue, or already
   // holding a key.
   readonly property var setupProviders: Providers.usableProviders(config, catalogue)
@@ -283,7 +286,7 @@ Item {
       root.loading = false
       return
     }
-    var url = Providers.searchUrl(config, root.provider, root.filterText.trim(), append ? root.nextCursor : "")
+    var url = Providers.searchUrl(config, catalogue, root.provider, root.filterText.trim(), append ? root.nextCursor : "")
     if (!url) return
     root.appending = append
     root.loading = true
@@ -322,7 +325,11 @@ Item {
         // Being over quota is not a reason to go looking at your API key.
         if (status === 429) root.errorText = base + " — try again in a minute"
         else if (status === 0 || status === 401 || status === 403)
-          root.errorText = base + " — check the API key in " + shortConfigPath()
+          // Without a key there is nothing to check: a refusal is the page
+          // itself saying no, which waiting usually clears.
+          root.errorText = base + (root.keyless
+            ? " — it may be throttling this machine; try again shortly"
+            : " — check the API key in " + shortConfigPath())
         else root.errorText = base
       } else {
         root.errorText = reported || root.curlMessage(exitCode)
@@ -900,8 +907,10 @@ Item {
             Text {
               textFormat: Text.PlainText
               visible: !root.configured
-              text: "Searching needs a free API key — no GIF service offers "
-                + "keyless search any more. Setup opens in a terminal and takes a minute."
+              text: "Pick a service below. Giphy needs a free API key and gives you "
+                + "the full picker; the no-key option searches Giphy's public page "
+                + "instead — about 25 results, no scrolling for more. Setup opens in "
+                + "a terminal and takes a minute."
               color: root.foreground
               opacity: 0.6
               font.family: root.fontFamily
