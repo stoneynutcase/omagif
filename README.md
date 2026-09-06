@@ -72,7 +72,7 @@ The picker says so, and `Ctrl+P` moves you to another provider.
 | `Alt+Enter` | copy the GIF's raw bytes as `image/gif` |
 | `Ctrl+S` | save the GIF to `~/Pictures/gifs` |
 | `Ctrl+O` | open the GIF's page in your browser |
-| `Ctrl+P` | switch provider for this session |
+| `Ctrl+P` | switch provider — remembered until you change service in setup |
 | `Ctrl+,` | reopen setup to change service or key |
 | `Backspace` | delete a character |
 | `Esc` | close the picker |
@@ -83,6 +83,10 @@ opens the page.
 Your search is never cleared behind your back: `Esc` closes the picker and
 leaves the query alone, so it is still there next time. The one thing that
 empties it is `Tab` then `Delete`.
+
+`Ctrl+P` sticks too. The provider you swap to is remembered across restarts,
+and stays until you pick a service in `omagif setup` — that is an explicit
+choice, so it wins.
 
 ### What Enter copies
 
@@ -180,7 +184,7 @@ permission to create lives outside it:
 
 ```bash
 rm -rf ~/.config/omagif                             # config, including your API key
-rm -rf ~/.cache/omagif ~/.local/state/omagif        # cached GIFs, history, log
+rm -rf ~/.cache/omagif ~/.local/state/omagif        # cached GIFs, history, log, last provider
 rm -f  ~/.local/bin/omagif                          # the CLI symlink
 rm -f  ~/.local/share/applications/omagif.desktop   # the desktop entry
 ```

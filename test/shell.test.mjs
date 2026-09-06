@@ -126,6 +126,70 @@ describe("setup", () => {
   })
 })
 
+// Ctrl+P writes the provider it swapped to into the state directory, and the
+// picker prefers it over the config. The rule that makes that safe is that
+// choosing a service in setup outranks it — without which setup would appear
+// to do nothing for anyone who had ever pressed Ctrl+P.
+describe("the remembered provider", () => {
+  function stateHome(saved) {
+    const dir = mkdtempSync(join(tmpdir(), "omagif-state-"))
+    mkdirSync(join(dir, "omagif"))
+    if (saved) {
+      writeFileSync(join(dir, "omagif", "provider.json"), JSON.stringify({ provider: saved }))
+    }
+    return dir
+  }
+
+  const config = { provider: "giphy", giphy: { apiKey: "kkkkkkkk" }, limit: 40, columns: 4 }
+
+  test("doctor reports the config's provider when nothing was swapped", () => {
+    const { link } = linkedCli()
+    const env = { ...process.env, XDG_CONFIG_HOME: configHome(config), XDG_STATE_HOME: stateHome() }
+    const { stdout } = run(link, ["doctor"], { env })
+    assert.match(stdout, /provider giphy\b/)
+    assert.doesNotMatch(stdout, /swapped with Ctrl\+P/)
+  })
+
+  test("doctor reports a swap, and says what the config still holds", () => {
+    const { link } = linkedCli()
+    const env = {
+      ...process.env,
+      XDG_CONFIG_HOME: configHome(config),
+      XDG_STATE_HOME: stateHome("tenor-keyless")
+    }
+    const { stdout } = run(link, ["doctor"], { env })
+    assert.match(stdout, /provider tenor-keyless \(swapped with Ctrl\+P; giphy in config\)/)
+  })
+
+  test("setup drops the remembered swap when it writes a provider", () => {
+    const configDir = configHome(config)
+    const stateDir = stateHome("tenor-keyless")
+    const saved = join(stateDir, "omagif", "provider.json")
+    assert.doesNotThrow(() => statSync(saved), "fixture did not create the state file")
+
+    const { status } = run("bash", [join(ROOT, "setup"), "--provider", "giphy-keyless"], {
+      env: { ...process.env, XDG_CONFIG_HOME: configDir, XDG_STATE_HOME: stateDir },
+      input: "y\nn\nn\nn\nn\nn\n"
+    })
+    assert.equal(status, 0)
+    assert.throws(
+      () => statSync(saved),
+      "setup wrote a provider but left the remembered swap in place, so it would be ignored"
+    )
+  })
+
+  test("a malformed state file does not break doctor", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omagif-state-"))
+    mkdirSync(join(dir, "omagif"))
+    writeFileSync(join(dir, "omagif", "provider.json"), "{not json")
+    const { link } = linkedCli()
+    const { stdout } = run(link, ["doctor"], {
+      env: { ...process.env, XDG_CONFIG_HOME: configHome(config), XDG_STATE_HOME: dir }
+    })
+    assert.match(stdout, /provider giphy\b/, `doctor did not fall back cleanly:\n${stdout}`)
+  })
+})
+
 describe("shipped JSON is valid", () => {
   for (const file of ["providers/index.json", "omagif.example.json", "manifest.json"]) {
     test(file, () => {

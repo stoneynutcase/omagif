@@ -32,6 +32,7 @@ EOF
 }
 
 HISTORY="${XDG_STATE_HOME:-$HOME/.local/state}/omagif/history.json"
+SAVED_PROVIDER="${XDG_STATE_HOME:-$HOME/.local/state}/omagif/provider.json"
 
 do_history() {
   if [[ ${1:-} == "clear" ]]; then
@@ -128,7 +129,23 @@ do_doctor() {
       local provider
       provider="$(config_get provider)"
       provider="${provider:-giphy}"
-      echo "  provider $provider"
+      # Ctrl+P remembers a swap in the state directory, and the picker honours
+      # it over the config. Reporting only the config would explain the wrong
+      # provider to someone asking why their searches look odd.
+      local swapped
+      swapped="$(python3 -c '
+import json, sys
+try:
+    value = json.load(open(sys.argv[1])).get("provider", "")
+except Exception:
+    value = ""
+print(str(value).strip())' "$SAVED_PROVIDER" 2>/dev/null || true)"
+      if [[ -n $swapped && $swapped != "$provider" ]]; then
+        echo "  provider $swapped (swapped with Ctrl+P; $provider in config)"
+        provider="$swapped"
+      else
+        echo "  provider $provider"
+      fi
       # Ask the catalogue which providers exist rather than hardcoding a list.
       while read -r id enabled keyless; do
         [[ -n $id ]] || continue

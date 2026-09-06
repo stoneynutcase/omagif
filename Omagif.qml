@@ -52,9 +52,14 @@ Item {
 
   // ------------------------------------------------------------------ config
   property var config: ({})
-  // Ctrl+P swaps providers for the session without rewriting the config file;
-  // `provider` in omagif.json stays the durable choice.
+  // Ctrl+P swaps providers without rewriting the config file — `provider` in
+  // omagif.json stays the choice you made in setup. The swap is remembered in
+  // the state directory instead, so it survives closing the picker and
+  // restarting the shell, and `./setup` clears it whenever it writes a
+  // provider: picking a service there is explicit and outranks a Ctrl+P from
+  // some earlier session.
   property string providerOverride: ""
+  property string savedProvider: ""
   // The parsed providers/index.json — the catalogue of what exists, what is
   // still offered, and where to get a key. Loaded from disk so a provider can
   // be added or retired without touching this file.
@@ -438,8 +443,44 @@ Item {
   function swapProvider() {
     if (!root.canSwapProvider) return
     root.providerOverride = root.swapTarget
+    root.rememberProvider(root.swapTarget)
     root.items = []
     root.requestSearch()
+  }
+
+  // ------------------------------------------------------- remembered provider
+
+  function loadSavedProvider(raw) {
+    var parsed = {}
+    try {
+      parsed = JSON.parse(raw)
+    } catch (e) {
+      parsed = {}
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) parsed = {}
+    root.savedProvider = String(parsed.provider || "").trim().toLowerCase()
+    root.applySavedProvider()
+  }
+
+  // Both the config and the catalogue arrive asynchronously, and a saved id is
+  // only worth honouring once they have — a provider that has since been
+  // retired, or whose key has been removed, must not strand the picker on a
+  // service it cannot search.
+  function applySavedProvider() {
+    if (!root.savedProvider) {
+      root.providerOverride = ""
+      return
+    }
+    if (!Providers.isConfigured(root.config, root.catalogue, root.savedProvider)) {
+      root.providerOverride = ""
+      return
+    }
+    root.providerOverride = root.savedProvider
+  }
+
+  function rememberProvider(id) {
+    root.savedProvider = String(id || "").trim().toLowerCase()
+    providerFile.setText(JSON.stringify({ provider: root.savedProvider }, null, 2) + "\n")
   }
 
   // ------------------------------------------------------------------- setup
@@ -481,12 +522,14 @@ Item {
         root.errorText = shortConfigPath() + " is not valid JSON"
       }
       root.config = parsed
-      root.providerOverride = ""
+      // Re-check the remembered swap against the config that just arrived: a
+      // key removed by hand should drop us back to a provider that works.
+      root.applySavedProvider()
       if (root.opened) root.requestSearch()
     }
     onLoadFailed: {
       root.config = ({})
-      root.providerOverride = ""
+      root.applySavedProvider()
     }
   }
 
@@ -501,6 +544,25 @@ Item {
     id: ensureDirs
     command: ["mkdir", "-p", root.stateDir, root.configDir]
     running: true
+  }
+
+  // The provider Ctrl+P last landed on. Kept in the state directory rather
+  // than the config because it is something the picker decided, not something
+  // the user wrote — the same reason search history lives there.
+  FileView {
+    id: providerFile
+    path: root.stateDir + "/provider.json"
+    watchChanges: true
+    atomicWrites: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.loadSavedProvider(text())
+    // Absent on a fresh install, and removed by ./setup whenever it writes a
+    // provider — both mean "no swap to restore".
+    onLoadFailed: {
+      root.savedProvider = ""
+      root.applySavedProvider()
+    }
   }
 
   FileView {
@@ -530,6 +592,8 @@ Item {
         root.catalogue = ({})
         console.warn("omagif: providers/index.json is not valid JSON")
       }
+      // Whether a remembered provider is usable depends on the catalogue.
+      root.applySavedProvider()
     }
     onLoadFailed: root.catalogue = ({})
   }

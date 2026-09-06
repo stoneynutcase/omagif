@@ -24,6 +24,7 @@ PLUGIN_ID="stoneynutcase.omagif"
 CATALOGUE="$SCRIPT_DIR/providers/index.json"
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 CONFIG="$CONFIG_HOME/omagif/config.json"
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omagif"
 BINDINGS="$CONFIG_HOME/hypr/bindings.lua"
 KEYBIND_KEYS="SUPER + SHIFT + PERIOD"
 KEYBIND="o.bind(\"$KEYBIND_KEYS\", \"GIF picker\", \"omarchy-shell shell toggle $PLUGIN_ID\")"
@@ -109,11 +110,19 @@ PY_LIST
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# gum drives a full-screen TUI and opens /dev/tty itself, so having it
+# installed is not enough — under a pipe, a script or CI it exits with
+# "could not open TTY" instead of degrading. Decide once whether it can
+# actually run here; everything below falls back to plain `read` when it
+# cannot, which is the path that was always meant to cover those cases.
+if have gum && { : >/dev/tty; } 2>/dev/null; then GUM=true; else GUM=false; fi
+use_gum() { [[ $GUM == true ]]; }
+
 # gum is what Omarchy's own tooling prompts with, and the floating-terminal
 # launcher themes it to match. Everything still works over a plain pipe or an
 # ssh session without it.
 heading() {
-  if have gum; then
+  if use_gum; then
     printf '\n'
     gum style --bold --foreground 4 "$1"
   else
@@ -122,12 +131,12 @@ heading() {
 }
 
 note() {
-  if have gum; then gum style --faint "$1"; else printf '   %s\n' "$1"; fi
+  if use_gum; then gum style --faint "$1"; else printf '   %s\n' "$1"; fi
 }
 
 confirm() {
   local prompt="$1" default="${2:-no}"
-  if have gum; then
+  if use_gum; then
     if [[ $default == yes ]]; then gum confirm "$prompt"; else gum confirm --default=false "$prompt"; fi
   else
     local suffix="[y/N]" answer
@@ -140,7 +149,7 @@ confirm() {
 
 ask() {
   local prompt="$1"
-  if have gum; then
+  if use_gum; then
     gum input --prompt "$prompt " --placeholder "paste it here" --width 80
   else
     local value
@@ -194,7 +203,7 @@ if [[ -z $provider ]]; then
     echo
     labels=()
     for row in "${offerable[@]}"; do labels+=("${row#*$'\t'}"); done
-    if have gum; then
+    if use_gum; then
       choice="$(printf '%s\n' "${labels[@]}" | gum choose --header="Pick a service:")" || fail "cancelled"
     else
       for i in "${!labels[@]}"; do printf '  %d) %s\n' "$((i + 1))" "${labels[$i]}"; done
@@ -385,6 +394,11 @@ with open(tmp, "w") as fh:
 os.chmod(tmp, 0o600)
 os.replace(tmp, path)
 PY
+
+# Ctrl+P remembers whichever provider it last swapped to, in the state
+# directory. Choosing a service here is explicit and outranks that, so the
+# remembered swap goes — otherwise setup would appear to do nothing.
+rm -f "$STATE/provider.json"
 
 heading "Saved"
 note "$CONFIG  (provider: $provider)"
