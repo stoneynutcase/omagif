@@ -6,7 +6,12 @@
 set -euo pipefail
 
 PLUGIN_ID="stoneynutcase.omagif"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolved through symlinks on purpose: `omagif install` links this script into
+# ~/.local/bin, so the common way to run it is through that link. Taking the
+# dirname of the link itself would put ROOT_DIR at ~/.local and every path
+# built from it — setup, the provider catalogue, the example config, the
+# desktop entry — would point at nothing.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/omagif/config.json"
 
