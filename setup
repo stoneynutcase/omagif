@@ -130,8 +130,15 @@ heading() {
   fi
 }
 
+# A provider's caveat runs to several sentences, so both paths wrap it rather
+# than letting the terminal break the text and drop the indent on every line
+# after the first.
 note() {
-  if use_gum; then gum style --faint "$1"; else printf '   %s\n' "$1"; fi
+  if use_gum; then
+    gum style --faint --width 76 "$1"
+  else
+    printf '%s\n' "$1" | fold -s -w 72 | sed 's/^/   /'
+  fi
 }
 
 confirm() {
@@ -197,9 +204,11 @@ if [[ -z $provider ]]; then
     provider="${offerable[0]%%$'\t'*}"
   else
     heading "Which GIF service should Omagif search?"
-    echo "  Giphy needs a free API key and gives you the full picker. The"
-    echo "  no-key option skips the sign-up and reads Giphy's public search"
-    echo "  page instead — fewer results, and easier to break."
+    echo "  The API-key options give you the full picker: more results, filters,"
+    echo "  and a versioned API behind them. The no-key options need no sign-up"
+    echo "  but read the service's public search page instead — one page of"
+    echo "  results, and they break if the site changes."
+    echo "  What each one costs is spelled out once you pick it."
     echo
     labels=()
     for row in "${offerable[@]}"; do labels+=("${row#*$'\t'}"); done

@@ -41,7 +41,10 @@ key)**. Neither needs a sign-up: pick one and search. `Ctrl+P` swaps between
 whatever you have set up, so you can run both with no key at all.
 
 Tenor is the notable one: Google stopped issuing Tenor API keys in January
-2026, so this is the only way a new install can use Tenor.
+2026, so this is the only way a new install can use Tenor. It is also the
+data-hungry one — Tenor serves much larger GIFs than Giphy, so a single search
+pulls 15-20 MB of previews and one copied GIF can be 10-20 MB. Worth knowing on
+a metered or slow connection; `setup` says so before you pick it.
 
 They read each service's public search page instead of its API, which costs
 you:
@@ -50,7 +53,7 @@ you:
 |---|---|---|
 | Results per search | 40, scroll for more | ~25 (Giphy) / ~49 (Tenor), no second page |
 | Filters | `rating`, `lang` | whatever the page decides |
-| File sizes | you pick the rendition | Tenor's GIFs are markedly heavier |
+| Traffic | you pick the rendition | Giphy under 1 MB a search; **Tenor 15-20 MB** |
 | Stability | a versioned API | scraped page — a redesign breaks it |
 
 If a service changes its page, that provider starts saying it found nothing.

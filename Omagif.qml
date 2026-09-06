@@ -985,10 +985,11 @@ Item {
             Text {
               textFormat: Text.PlainText
               visible: !root.configured
-              text: "Pick a service below. Giphy needs a free API key and gives you "
-                + "the full picker; the no-key option searches Giphy's public page "
-                + "instead — about 25 results, no scrolling for more. Setup opens in "
-                + "a terminal and takes a minute."
+              text: "Pick a service below. An API key gives you the full picker — more "
+                + "results, filters, a real API. The no-key options need no sign-up but "
+                + "read the service's public search page instead: one page of results, "
+                + "and Tenor's are large enough to notice on a metered connection. "
+                + "Setup opens in a terminal and takes a minute."
               color: root.foreground
               opacity: 0.6
               font.family: root.fontFamily
