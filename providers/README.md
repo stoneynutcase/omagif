@@ -62,13 +62,20 @@ MODULES[ExampleModule.id] = ExampleModule
   "enabled": true,
   "keyUrl": "https://example.com/developers",
   "keyHint": "Where to click to get a key.",
-  "verifyUrl": "https://api.example.com/search?key={key}&limit=1"
+  "verifyUrl": "https://api.example.com/search?key={key}&limit=1",
+  "mediaHosts": ["example.com"]
 }
 ```
 
 `verifyUrl` is called by `./setup` with `{key}` substituted, to check a pasted
 key actually works before saving it. `keyUrl` and `keyHint` are what setup
-shows the user. Settings the user can tune go under a config key named after
+shows the user.
+
+`mediaHosts` is not optional. The URLs your `parse()` returns came out of a
+remote response, so an item is dropped unless its `previewUrl`, `gifUrl` and
+`pageUrl` are all `https` on one of these hosts or a subdomain of one — before
+the grid, the downloader or `xdg-open` sees it. Leave it out and your provider
+searches fine and displays nothing. Settings the user can tune go under a config key named after
 the provider id, and reach your module as `settings`:
 
 ```json

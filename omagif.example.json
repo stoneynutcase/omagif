@@ -35,6 +35,9 @@
   "//pasteDelayMs": "wait before the keystroke, so focus is back on your app",
   "pasteDelayMs": 300,
 
+  "//maxDownloadMB": "ceiling on a single GIF download, 1-256; anything larger is refused rather than cached",
+  "maxDownloadMB": 48,
+
   "cacheDir": "~/.cache/omagif",
   "saveDir": "~/Pictures/gifs"
 }

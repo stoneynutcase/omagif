@@ -25,7 +25,9 @@ Omagif — GIF picker for the Omarchy shell
   omagif setup [--provider <id>]
                          Pick a service, add its API key, write the config
   omagif config          Print the config path, or open it in $EDITOR
-  omagif install         Put `omagif` on PATH and add a desktop entry
+  omagif install [--force]
+                         Put `omagif` on PATH and add a desktop entry.
+                         --force replaces files this plugin does not own
   omagif doctor          Check dependencies, config, and plugin status
   omagif history [clear] List past searches, or forget them all
 EOF
@@ -82,23 +84,65 @@ ipc() {
   omarchy-shell shell "$1" "$PLUGIN_ID" '{}'
 }
 
-do_install() {
-  mkdir -p "$HOME/.local/bin"
-  ln -sf "$SCRIPT_DIR/omagif" "$HOME/.local/bin/omagif"
-  echo "Linked $HOME/.local/bin/omagif"
+# `omagif install` is the one thing here that writes outside the plugin's own
+# checkout: a symlink on PATH and a desktop entry. Both are shared namespaces —
+# another package, or an earlier hand-rolled setup, can already own those
+# names, and silently replacing whatever is there is not ours to do. So each
+# target is claimed only if it is absent or demonstrably ours, and --force is
+# how you say otherwise.
+DESKTOP_MARKER="X-Omagif-Plugin=$PLUGIN_ID"
 
+# Ours if it is a symlink resolving to this very script. A regular file at that
+# path is somebody else's `omagif`, whatever it happens to do.
+owns_cli_link() {
+  [[ -L $1 ]] || return 1
+  [[ "$(readlink -f "$1")" == "$(readlink -f "$SCRIPT_DIR/omagif")" ]]
+}
+
+# Ours if it carries the marker line that share/omagif.desktop ships with.
+owns_desktop_entry() {
+  grep -qF "$DESKTOP_MARKER" "$1" 2>/dev/null
+}
+
+refuse() {
+  echo "omagif: $1 already exists and was not put there by this plugin." >&2
+  echo "        Left alone. Re-run as \`omagif install --force\` to replace it." >&2
+}
+
+do_install() {
+  local force=false refused=0
+  [[ ${1:-} == "--force" ]] && force=true
+
+  local link="$HOME/.local/bin/omagif"
+  if [[ ( -e $link || -L $link ) ]] && ! owns_cli_link "$link" && [[ $force != true ]]; then
+    refuse "$link"
+    refused=1
+  else
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$SCRIPT_DIR/omagif" "$link"
+    echo "Linked $link"
+  fi
+
+  local entry="$HOME/.local/share/applications/omagif.desktop"
   if [[ -f "$ROOT_DIR/share/omagif.desktop" ]]; then
-    mkdir -p "$HOME/.local/share/applications"
-    install -m 644 "$ROOT_DIR/share/omagif.desktop" "$HOME/.local/share/applications/omagif.desktop"
-    command -v update-desktop-database >/dev/null 2>&1 &&
-      update-desktop-database "$HOME/.local/share/applications" || true
-    echo "Installed desktop entry"
+    if [[ -e $entry ]] && ! owns_desktop_entry "$entry" && [[ $force != true ]]; then
+      refuse "$entry"
+      refused=1
+    else
+      mkdir -p "$HOME/.local/share/applications"
+      install -m 644 "$ROOT_DIR/share/omagif.desktop" "$entry"
+      command -v update-desktop-database >/dev/null 2>&1 &&
+        update-desktop-database "$HOME/.local/share/applications" || true
+      echo "Installed desktop entry"
+    fi
   fi
 
   case ":$PATH:" in
     *":$HOME/.local/bin:"*) ;;
     *) echo "Note: $HOME/.local/bin is not on your PATH." ;;
   esac
+
+  return $refused
 }
 
 do_doctor() {
@@ -205,7 +249,10 @@ case "${1:-toggle}" in
     fi
     echo "$CONFIG"
     ;;
-  install) do_install ;;
+  install)
+    shift
+    do_install "$@"
+    ;;
   doctor)  do_doctor ;;
   history)
     shift

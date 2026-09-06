@@ -5,6 +5,11 @@ name: Integration
 # on Giphy's schedule rather than on ours — hence the daily run, not just a
 # run on push.
 #
+# Actions are pinned to a commit SHA, with the version they were at in the
+# comment beside them. A tag like v7 is a moving pointer its owner can repoint
+# at any time, and the keyed job below runs with GIPHY_API_KEY in its
+# environment — that is not a job to hand to whatever a tag means today.
+#
 # Setup: add a Giphy API key as the repository secret GIPHY_API_KEY
 # (Settings → Secrets and variables → Actions). Without it the keyed job still
 # runs and simply skips the tests that need a key, so pull requests from forks
@@ -52,9 +57,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -66,9 +71,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -80,9 +85,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
 
@@ -102,7 +107,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/github-script@v9
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const title = "Daily integration run is failing";

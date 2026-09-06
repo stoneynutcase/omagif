@@ -59,9 +59,13 @@ function linkedCli() {
 // below it passes or fails for a reason that has nothing to do with what it
 // claims to check. Stubbing makes these hermetic: they exercise setup's own
 // logic rather than the host's package set.
+// notify-send is stubbed for a different reason than the Wayland pair: it is
+// not a gate, it works fine, and that is the problem — bin/omagif-action pops a
+// real desktop notification on every failure, and the failures below are
+// deliberate. The stub shadows the real one for the length of a test.
 function pathWithStubbedDeps() {
   const dir = mkdtempSync(join(tmpdir(), "omagif-bin-"))
-  for (const tool of ["wl-copy", "wtype"]) {
+  for (const tool of ["wl-copy", "wtype", "notify-send"]) {
     const file = join(dir, tool)
     writeFileSync(file, "#!/bin/sh\nexit 0\n")
     chmodSync(file, 0o755)
@@ -220,6 +224,119 @@ describe("the remembered provider", () => {
       env: { ...process.env, XDG_CONFIG_HOME: configHome(config), XDG_STATE_HOME: dir }
     })
     assert.match(stdout, /provider giphy\b/, `doctor did not fall back cleanly:\n${stdout}`)
+  })
+})
+
+// `omagif install` is the only thing here that writes outside the plugin's own
+// checkout, into two names it does not own: ~/.local/bin/omagif and a desktop
+// entry. Replacing someone else's file at either is not ours to do silently.
+describe("install refuses to take over what it does not own", () => {
+  const CLI = join(ROOT, "bin/omagif")
+
+  function fakeHome() {
+    return mkdtempSync(join(tmpdir(), "omagif-home-"))
+  }
+
+  function install(home, args = []) {
+    return run("bash", [CLI, "install", ...args], {
+      env: { ...process.env, HOME: home, PATH: pathWithStubbedDeps() }
+    })
+  }
+
+  const link = (home) => join(home, ".local/bin/omagif")
+  const entry = (home) => join(home, ".local/share/applications/omagif.desktop")
+
+  test("a clean home gets the link and the desktop entry", () => {
+    const home = fakeHome()
+    const { status, stdout } = install(home)
+    assert.equal(status, 0, `install failed:\n${stdout}`)
+    assert.equal(
+      statSync(link(home)).isFile() || statSync(link(home)).isSymbolicLink(),
+      true
+    )
+    assert.match(readFileSync(entry(home), "utf8"), /X-Omagif-Plugin=/)
+  })
+
+  test("running it twice is fine — the second run owns what the first wrote", () => {
+    const home = fakeHome()
+    assert.equal(install(home).status, 0)
+    const { status, stdout, stderr } = install(home)
+    assert.equal(status, 0, `a re-install refused its own files:\n${stdout}${stderr}`)
+  })
+
+  test("someone else's omagif on PATH is left exactly as it was", () => {
+    const home = fakeHome()
+    mkdirSync(join(home, ".local/bin"), { recursive: true })
+    writeFileSync(link(home), "#!/bin/sh\necho not ours\n")
+
+    const { status, stderr } = install(home)
+    assert.notEqual(status, 0, "install reported success after refusing to write")
+    assert.match(stderr, /--force/, `the refusal should say how to override it:\n${stderr}`)
+    assert.equal(
+      readFileSync(link(home), "utf8"),
+      "#!/bin/sh\necho not ours\n",
+      "install overwrote a file it does not own"
+    )
+  })
+
+  test("a desktop entry without our marker is left alone", () => {
+    const home = fakeHome()
+    mkdirSync(join(home, ".local/share/applications"), { recursive: true })
+    writeFileSync(entry(home), "[Desktop Entry]\nName=Someone else\n")
+
+    const { status, stderr } = install(home)
+    assert.notEqual(status, 0)
+    assert.doesNotMatch(readFileSync(entry(home), "utf8"), /X-Omagif-Plugin=/)
+    assert.match(stderr, /omagif\.desktop/)
+  })
+
+  test("--force is the way to say yes, take it", () => {
+    const home = fakeHome()
+    mkdirSync(join(home, ".local/bin"), { recursive: true })
+    writeFileSync(link(home), "#!/bin/sh\necho not ours\n")
+
+    const { status } = install(home, ["--force"])
+    assert.equal(status, 0)
+    assert.notEqual(readFileSync(link(home), "utf8"), "#!/bin/sh\necho not ours\n")
+  })
+})
+
+// Every URL the picker acts on came out of a remote response. bin/omagif-action
+// is the boundary where one stops being text, so it re-checks scheme and host
+// itself rather than trusting the caller — it is reachable from a shell too.
+describe("omagif-action refuses a URL it was not meant to fetch", () => {
+  const ACTION = join(ROOT, "bin/omagif-action")
+
+  function act(url) {
+    const cache = mkdtempSync(join(tmpdir(), "omagif-cache-"))
+    return run("bash", [ACTION, "cache", url, cache], {
+      env: { ...process.env, PATH: pathWithStubbedDeps() }
+    })
+  }
+
+  // Each of these would be a request to somewhere the catalogue never named.
+  // None of them reach the network: the gate runs before any verb does.
+  for (const url of [
+    "http://i.giphy.com/abc.gif",
+    "https://evil.example/abc.gif",
+    "https://notgiphy.com/abc.gif",
+    "https://giphy.com.evil.example/abc.gif",
+    "https://giphy.com@evil.example/abc.gif",
+    "file:///etc/passwd",
+    "ftp://giphy.com/abc.gif"
+  ]) {
+    test(`refuses ${url}`, () => {
+      const { status, stderr } = act(url)
+      assert.notEqual(status, 0, `${url} was accepted`)
+      assert.match(stderr, /refused a URL/, `unexpected failure for ${url}:\n${stderr}`)
+    })
+  }
+
+  test("an unknown verb is still refused before anything else", () => {
+    const { status } = run("bash", [ACTION, "wat", "https://i.giphy.com/abc.gif"], {
+      env: { ...process.env, PATH: pathWithStubbedDeps() }
+    })
+    assert.equal(status, 64)
   })
 })
 

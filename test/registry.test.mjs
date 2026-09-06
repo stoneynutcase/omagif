@@ -48,6 +48,12 @@ describe("catalogue", () => {
       if (entry.enabled !== true) {
         assert.ok(entry.disabledReason, `${entry.id} is disabled and must say why`)
       }
+      // Without this list a provider can display and download nothing at all,
+      // which is the safe way round but looks exactly like a broken service.
+      assert.ok(
+        Array.isArray(entry.mediaHosts) && entry.mediaHosts.length > 0,
+        `${entry.id} needs mediaHosts — every media URL is checked against it`
+      )
     }
   })
 
@@ -113,6 +119,68 @@ describe("readiness", () => {
     }
     assert.ok(!targets.has("tenor"), "swapped to tenor, which has no key")
     assert.ok(targets.has("giphy-keyless"))
+  })
+})
+
+// A media URL is read out of whatever answered the search, so it is only as
+// trustworthy as that response. Omagif.qml drops any item that fails this
+// before the grid, the downloader or xdg-open ever sees it.
+describe("media URLs are held to the catalogue's hosts", () => {
+  const allowed = (id, url) => Providers.isAllowedMediaUrl(catalogue, id, url)
+
+  test("the URLs the providers actually build are allowed", () => {
+    for (const url of [
+      "https://i.giphy.com/media/abc123/200w.gif",
+      "https://media3.giphy.com/media/abc123/giphy.gif",
+      "https://giphy.com/gifs/cat-15UbO1LY4O2Fxw8gnI"
+    ]) {
+      assert.ok(allowed("giphy", url), `${url} should be allowed for giphy`)
+      assert.ok(allowed("giphy-keyless", url), `${url} should be allowed for giphy-keyless`)
+    }
+    for (const url of [
+      "https://media.tenor.com/sXrVe29tNJwAAAAM/cat-gun.gif",
+      "https://c.tenor.com/abc/tenor.gif",
+      "https://tenor.com/view/cat-gun-gif-12345"
+    ]) {
+      assert.ok(allowed("tenor", url), `${url} should be allowed for tenor`)
+      assert.ok(allowed("tenor-keyless", url), `${url} should be allowed for tenor-keyless`)
+    }
+  })
+
+  test("a provider's hosts do not carry over to another provider", () => {
+    assert.equal(allowed("giphy", "https://media.tenor.com/x/cat.gif"), false)
+    assert.equal(allowed("tenor-keyless", "https://i.giphy.com/abc.gif"), false)
+  })
+
+  test("plain http is refused even on the right host", () => {
+    assert.equal(allowed("giphy", "http://i.giphy.com/abc.gif"), false)
+    assert.equal(allowed("giphy", "//i.giphy.com/abc.gif"), false)
+    assert.equal(allowed("giphy", "file:///etc/passwd"), false)
+  })
+
+  test("a host that merely ends in the right letters is refused", () => {
+    // notgiphy.com is not a subdomain of giphy.com, and the suffix check is
+    // the easy thing to get wrong here.
+    assert.equal(allowed("giphy", "https://notgiphy.com/abc.gif"), false)
+    assert.equal(allowed("giphy", "https://giphy.com.evil.example/abc.gif"), false)
+    assert.equal(allowed("tenor", "https://tenor.com.evil.example/x.gif"), false)
+  })
+
+  test("credentials and ports cannot disguise the real host", () => {
+    assert.equal(allowed("giphy", "https://giphy.com@evil.example/abc.gif"), false)
+    assert.equal(allowed("giphy", "https://user:pw@evil.example/abc.gif"), false)
+    // The host is still giphy.com when a port is on it.
+    assert.equal(allowed("giphy", "https://i.giphy.com:443/abc.gif"), true)
+  })
+
+  test("nothing, and nonsense, are refused", () => {
+    for (const url of ["", "   ", null, undefined, "not a url", "https://"]) {
+      assert.equal(allowed("giphy", url), false, `${url} should be refused`)
+    }
+  })
+
+  test("a provider with no mediaHosts allows nothing", () => {
+    assert.equal(allowed("nonexistent", "https://i.giphy.com/abc.gif"), false)
   })
 })
 

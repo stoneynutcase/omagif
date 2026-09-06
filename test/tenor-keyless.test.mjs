@@ -53,7 +53,7 @@ describe("keyless Tenor search (live)", () => {
 
   test("every item has the full shape the picker needs", () => {
     for (const item of result.parsed.items) {
-      assertItemShape(assert, item)
+      assertItemShape(assert, item, { provider: "tenor-keyless" })
     }
   })
 

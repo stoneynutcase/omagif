@@ -121,7 +121,11 @@ export async function headStatus(url, { attempts = ATTEMPTS } = {}) {
 // The flat shape every provider must produce, per providers/README.md. A
 // service that quietly stops supplying one of these fields is precisely the
 // breaking change this suite exists to catch.
-export function assertItemShape(assert, item, { requireDimensions = true } = {}) {
+// `provider` opts into the check the picker itself applies: an item whose URLs
+// are not on that provider's mediaHosts is dropped before it reaches the grid.
+// Passing it here is what turns "the service moved its CDN" from an empty
+// picker into a failing daily run.
+export function assertItemShape(assert, item, { requireDimensions = true, provider = "" } = {}) {
   assert.ok(item, "item is present")
   for (const field of ["id", "previewUrl", "gifUrl", "pageUrl"]) {
     assert.equal(typeof item[field], "string", `${field} is a string`)
@@ -130,6 +134,18 @@ export function assertItemShape(assert, item, { requireDimensions = true } = {})
   assert.equal(typeof item.title, "string", "title is a string")
   for (const url of [item.previewUrl, item.gifUrl, item.pageUrl]) {
     assert.match(url, /^https:\/\//, `${url} is https`)
+  }
+  if (provider) {
+    const Providers = loadProviders()
+    const catalogue = loadCatalogue()
+    for (const url of [item.previewUrl, item.gifUrl, item.pageUrl]) {
+      assert.ok(
+        Providers.isAllowedMediaUrl(catalogue, provider, url),
+        `${url} is not on a host listed for ${provider} in providers/index.json, ` +
+          `so the picker would drop this item. Either the service has moved its ` +
+          `media, or that list is out of date.`
+      )
+    }
   }
   if (requireDimensions) {
     assert.ok(item.width > 0, `width is positive (got ${item.width})`)

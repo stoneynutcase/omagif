@@ -9,3 +9,6 @@ Terminal=false
 Categories=Utility;Graphics;
 Keywords=gif;giphy;tenor;emoji;sticker;
 StartupNotify=false
+# How `omagif install` recognises an entry it wrote. Without it, a desktop file
+# already at that name is treated as somebody else's and left alone.
+X-Omagif-Plugin=stoneynutcase.omagif
