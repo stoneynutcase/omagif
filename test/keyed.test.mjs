@@ -8,7 +8,7 @@ import { test, describe, before } from "node:test"
 import assert from "node:assert/strict"
 import { loadModules, fetchText, headStatus, assertItemShape } from "./harness.mjs"
 
-const { Giphy } = loadModules()
+const Giphy = loadModules()["giphy"]
 
 const API_KEY = (process.env.GIPHY_API_KEY || "").trim()
 const skip = API_KEY ? false : "GIPHY_API_KEY is not set"

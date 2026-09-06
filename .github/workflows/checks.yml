@@ -1,0 +1,45 @@
+name: Checks
+
+# The tests that need no network: catalogue and registry consistency, URL
+# building, and the shell scripts. They live apart from Integration because
+# they answer a different question — "is the plugin's own wiring intact?"
+# rather than "has a GIF service changed?" — and because they should still run
+# on a pull request that never touches a provider.
+#
+# Fast enough to run on every push and pull request, with no path filter and
+# nothing to install.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  offline:
+    name: Catalogue, registry and scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      # A provider missing from the catalogue or the module registry, a keyless
+      # entry with no caveat, broken URL building.
+      - name: Catalogue and registry
+        run: node --test --test-reporter=spec test/registry.test.mjs
+
+      # `setup` and `bin/omagif` — syntax, the executable bit, and running the
+      # CLI through a symlink, the way `omagif install` sets it up.
+      - name: Shell scripts
+        run: node --test --test-reporter=spec test/shell.test.mjs

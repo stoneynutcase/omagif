@@ -27,25 +27,34 @@ function evaluate(relPath, bindings) {
   return context
 }
 
-// Every provider module, keyed by the id it declares — the same mapping
-// Providers.js builds from its `.import` list.
-export function loadModules() {
-  return {
-    Giphy: evaluate("providers/Giphy.js"),
-    GiphyKeyless: evaluate("providers/GiphyKeyless.js"),
-    Tenor: evaluate("providers/Tenor.js")
+// `.import "providers/Giphy.js" as GiphyModule` — the header the QML engine
+// reads and node does not.
+const IMPORT_LINE = /^\s*\.import\s+"([^"]+)"\s+as\s+([A-Za-z_$][\w$]*)\s*$/gm
+
+// The bindings Providers.js's `.import` header would have supplied, read from
+// that header rather than restated here — a list kept by hand drifts the
+// moment someone adds a provider, and the failure looks like a broken registry
+// rather than a stale test.
+function importedModules() {
+  const source = readFileSync(join(ROOT, "Providers.js"), "utf8")
+  const bindings = {}
+  for (const [, path, binding] of source.matchAll(IMPORT_LINE)) {
+    bindings[binding] = evaluate(path)
   }
+  return bindings
 }
 
-// The registry, with the module bindings its `.import` header would have
-// supplied. Keep these names in step with that header.
+// Every provider module, keyed by the id it declares.
+export function loadModules() {
+  const byId = {}
+  for (const module of Object.values(importedModules())) {
+    if (module.id) byId[module.id] = module
+  }
+  return byId
+}
+
 export function loadProviders() {
-  const modules = loadModules()
-  return evaluate("Providers.js", {
-    GiphyModule: modules.Giphy,
-    GiphyKeylessModule: modules.GiphyKeyless,
-    TenorModule: modules.Tenor
-  })
+  return evaluate("Providers.js", importedModules())
 }
 
 export function loadCatalogue() {

@@ -40,13 +40,14 @@ in `providers/index.json` — the single catalogue that the picker, `setup` and
 exactly once. Adding one is a module, one `.import`, and a JSON entry. The
 contract is in [`providers/README.md`](providers/README.md).
 
-**Tenor is present but disabled.** Google stopped accepting new Tenor API
-clients in January 2026, so a fresh install has no way to obtain a key. Its
-`v2` endpoint still serves *existing* keys, so the module is kept intact and
-anyone who already holds one can select it. If signups reopen, flipping
-`enabled` in `providers/index.json` brings it back with no other change.
+**`tenor` (keyed) is present but disabled.** Google stopped accepting new
+Tenor API clients in January 2026, so a fresh install has no way to obtain a
+key. Its `v2` endpoint still serves *existing* keys, so the module is kept
+intact and anyone who already holds one can select it. If signups reopen,
+flipping `enabled` in `providers/index.json` brings it back with no other
+change. `tenor-keyless` is what a new install gets instead.
 
-### The keyless provider
+### The keyless providers
 
 `providers/GiphyKeyless.js` reads giphy.com's public search page rather than
 the API, because the API authenticates every request and the old public beta
@@ -69,6 +70,34 @@ Constraints worth knowing before changing it:
   destroys them.
 - The `ld+json` block on the page carries only five entries, not the full
   grid — it is not a useful parse target.
+
+#### Tenor
+
+`providers/TenorKeyless.js` reads tenor.com the same way, and the site is
+friendlier to it: `robots.txt` is `Disallow:` with nothing listed, there is no
+restrictive robots meta, and the media URLs carry **no query string**, so
+nothing has to be rebuilt to make a link shareable.
+
+Each result is a `<figure class="UniversalGifListItem" data-width data-height>`
+wrapping an `/view/<slug>-gif-<id>` link and an `<img>`. The id is the trailing
+number on that path — not the media id in the CDN URL, which differs per
+rendition.
+
+- **`-gifs` is part of the search path.** `/search/cat` 301-redirects to
+  `/search/cat-gifs`, and the picker's `curl` has no `-L`.
+- **Empty term means the front page**, `https://tenor.com/`. There is no
+  trending path — `/trending` and `/explore/trending` both 404, and
+  `/search/trending-gifs` is a literal search for the word.
+- **Renditions are a suffix on the media id**: `AAAAS` 82px, `AAAAM` 165px
+  (what the grid serves), `AAAAd` 338px, `AAAAC` full. The grid serves GIF or
+  WebP depending on negotiation (`AAAAM` vs `AAAAm`), so the parser captures
+  the base id and slug and rebuilds the URL rather than reusing it.
+- **No pagination.** `?page=2` returns the same results.
+- **Tenor answers a nonsense query with fallback results**, so zero items means
+  the markup moved — there is no "genuinely no matches" case to confuse it with.
+- **The grid contains a promo tile** with the same class and no `/view/` link.
+- Tenor's GIFs are much heavier than Giphy's: a grid of previews averages
+  ~17 MB against ~0.2 MB, and a full rendition can exceed 20 MB.
 
 ## Reloading
 
@@ -133,6 +162,7 @@ are the ones Giphy causes:
 | `registry.test.mjs` | nothing | a provider missing from the catalogue or the module registry, a keyless entry with no caveat, broken URL building |
 | `shell.test.mjs` | nothing | `setup` and `bin/omagif` breaking — syntax, the executable bit, and running the CLI **through its symlink**, which is how `omagif install` sets it up |
 | `keyless.test.mjs` | network | **Giphy changing its search page** — the parse yields nothing while the request still returns `200` |
+| `tenor-keyless.test.mjs` | network | the same, for tenor.com |
 | `keyed.test.mjs` | `GIPHY_API_KEY` | the API changing shape, renditions disappearing, offset paging breaking |
 
 Set `GIPHY_API_KEY` to run the keyed tests locally; without it they skip rather
@@ -151,7 +181,18 @@ printed rather than on its exit status.
 
 [`.github/workflows/integration.yml`](.github/workflows/integration.yml) runs
 the suite every morning, plus on pull requests that touch provider or script
-code. The daily schedule is the point: the keyless provider reads markup Giphy
+code. One job per service surface, so a red check names the cause on its own:
+
+| Job | Fails when |
+| --- | --- |
+| Giphy (Search) | Giphy changed its search page |
+| Giphy (API) | the API changed, or the key is revoked or over quota |
+| Tenor (Search) | Tenor changed its search page |
+
+The offline tests live in a separate [`Checks`](.github/workflows/checks.yml)
+workflow — they ask whether the plugin's own wiring is intact rather than
+whether a service moved, and they run on every pull request, including ones
+that never touch a provider. The daily schedule is the point: the keyless provider reads markup Giphy
 never promised to keep, so that breakage arrives on Giphy's timetable, not on
 ours. A failed scheduled run opens (or comments on) an issue, since nobody is
 watching a cron.

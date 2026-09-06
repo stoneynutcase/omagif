@@ -80,21 +80,44 @@ describe("readiness", () => {
     assert.ok(Providers.searchUrl({}, catalogue, "giphy-keyless", "cat", ""))
   })
 
-  test("Ctrl+P only offers providers that can actually search", () => {
-    // Keyless alone is one ready provider, so there is nothing to swap to.
-    assert.equal(
-      Providers.nextProvider({ provider: "giphy-keyless" }, catalogue, "giphy-keyless"),
-      ""
-    )
-    // With a Giphy key there are two, and they alternate.
+  test("Ctrl+P cycles the keyless providers with no config at all", () => {
+    // Both keyless providers are ready the moment they exist, so a fresh
+    // install can swap services without ever holding a key.
+    const keyless = Providers.usableProviders({}, catalogue)
+      .filter((id) => Providers.isKeyless(catalogue, id))
+    assert.ok(keyless.length >= 2, `expected at least two keyless providers, got ${keyless}`)
+
+    // Every hop lands on a different ready provider, and the cycle closes.
+    const seen = new Set()
+    let at = keyless[0]
+    for (let hop = 0; hop < keyless.length; hop++) {
+      seen.add(at)
+      const next = Providers.nextProvider({}, catalogue, at)
+      assert.notEqual(next, "", `no swap target from ${at}`)
+      assert.notEqual(next, at, `${at} swapped to itself`)
+      at = next
+    }
+    assert.equal(at, keyless[0], "the swap cycle did not return to where it started")
+    assert.equal(seen.size, keyless.length, "the cycle skipped a ready provider")
+  })
+
+  test("Ctrl+P skips providers with no key and no keyless route", () => {
+    // `tenor` is disabled and keyed, so it must never be a swap target.
     const config = { provider: "giphy", giphy: { apiKey: "k" } }
-    assert.equal(Providers.nextProvider(config, catalogue, "giphy"), "giphy-keyless")
-    assert.equal(Providers.nextProvider(config, catalogue, "giphy-keyless"), "giphy")
+    const targets = new Set()
+    let at = "giphy"
+    for (let hop = 0; hop < 6; hop++) {
+      at = Providers.nextProvider(config, catalogue, at)
+      if (!at) break
+      targets.add(at)
+    }
+    assert.ok(!targets.has("tenor"), "swapped to tenor, which has no key")
+    assert.ok(targets.has("giphy-keyless"))
   })
 })
 
 describe("keyless URL building", () => {
-  const url = (term) => modules.GiphyKeyless.searchUrl("", {}, term, 40, "")
+  const url = (term) => modules["giphy-keyless"].searchUrl("", {}, term, 40, "")
 
   test("multi-word terms use the hyphen form", () => {
     // The picker searches with `curl` and no -L. The percent-encoded form
@@ -115,13 +138,13 @@ describe("keyless URL building", () => {
   })
 
   test("a cursor yields no URL, because there is no second page", () => {
-    assert.equal(modules.GiphyKeyless.searchUrl("", {}, "cat", 40, "25"), "")
+    assert.equal(modules["giphy-keyless"].searchUrl("", {}, "cat", 40, "25"), "")
   })
 })
 
 describe("keyless parse failure modes", () => {
   test("a page with no results explains itself rather than looking empty", () => {
-    const parsed = modules.GiphyKeyless.parse(
+    const parsed = modules["giphy-keyless"].parse(
       "<html><body>giphy.com and nothing else</body></html>",
       ""
     )
@@ -130,14 +153,14 @@ describe("keyless parse failure modes", () => {
   })
 
   test("a response that is not a Giphy page is reported differently", () => {
-    const parsed = modules.GiphyKeyless.parse("<html>nope</html>", "")
+    const parsed = modules["giphy-keyless"].parse("<html>nope</html>", "")
     assert.equal(parsed.items.length, 0)
     assert.match(parsed.error, /unreadable|rate limiting/i)
   })
 
   test("empty and null bodies do not throw", () => {
     for (const raw of ["", null, undefined]) {
-      const parsed = modules.GiphyKeyless.parse(raw, "")
+      const parsed = modules["giphy-keyless"].parse(raw, "")
       assert.equal(parsed.items.length, 0)
       assert.ok(parsed.error)
     }

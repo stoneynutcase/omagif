@@ -9,7 +9,7 @@ import { test, describe, before } from "node:test"
 import assert from "node:assert/strict"
 import { loadModules, fetchText, headStatus, assertItemShape } from "./harness.mjs"
 
-const { GiphyKeyless } = loadModules()
+const GiphyKeyless = loadModules()["giphy-keyless"]
 
 // Giphy returns 25 tiles per page today. Asserting a floor well under that
 // catches the grid disappearing without failing over normal drift in how many

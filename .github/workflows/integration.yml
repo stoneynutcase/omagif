@@ -47,8 +47,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  keyless:
-    name: Keyless (giphy.com search page)
+  giphy-keyless:
+    name: Giphy (Search)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -58,23 +58,25 @@ jobs:
         with:
           node-version: "22"
 
-      # Offline: catalogue/registry consistency and URL building. Fast, and it
-      # localises a failure — if this passes and the live job does not, the
-      # plugin is fine and Giphy moved.
-      - name: Catalogue and registry
-        run: node --test --test-reporter=spec test/registry.test.mjs
-
-      # Also offline. Covers the shell scripts, which the provider tests do
-      # not touch — including running the CLI through a symlink, the way
-      # `omagif install` sets it up.
-      - name: Shell scripts
-        run: node --test --test-reporter=spec test/shell.test.mjs
-
-      - name: Live keyless search
+      - name: Live search
         run: node --test --test-reporter=spec test/keyless.test.mjs
 
+  tenor-keyless:
+    name: Tenor (Search)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Live search
+        run: node --test --test-reporter=spec test/tenor-keyless.test.mjs
+
   keyed:
-    name: Keyed (Giphy API)
+    name: Giphy (API)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -91,7 +93,7 @@ jobs:
 
   report:
     name: Report a broken daily run
-    needs: [keyless, keyed]
+    needs: [giphy-keyless, keyed, tenor-keyless]
     # Only for the unattended run. A failure on a push or a pull request is
     # already in front of whoever caused it.
     if: failure() && github.event_name == 'schedule'
@@ -111,10 +113,12 @@ jobs:
               "",
               "Where to look first:",
               "",
-              "- **Keyless** reads giphy.com's public search page. If that job failed, Giphy has",
-              "  most likely changed the markup `providers/GiphyKeyless.js` parses — it looks for",
-              "  anchors carrying `data-giphy-id`. Users on the no-key provider will be seeing",
-              "  \"no results\" for every search.",
+              "- **Keyless — giphy.com** reads Giphy's public search page, looking for anchors",
+              "  carrying `data-giphy-id`. If it failed, Giphy changed that markup.",
+              "- **Keyless — tenor.com** reads Tenor's, looking for",
+              "  `<figure class=\"UniversalGifListItem\">` wrapping a `/view/` link.",
+              "  Either failure means users on that no-key provider see \"no results\" for",
+              "  every search, while the request still returns 200.",
               "- **Keyed** calls the Giphy API with the `GIPHY_API_KEY` secret. If that job failed,",
               "  check the key is still valid and in quota before suspecting the code.",
             ].join("\n");

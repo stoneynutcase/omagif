@@ -52,9 +52,14 @@ Item {
 
   // ------------------------------------------------------------------ config
   property var config: ({})
-  // Ctrl+P swaps providers for the session without rewriting the config file;
-  // `provider` in omagif.json stays the durable choice.
+  // Ctrl+P swaps providers without rewriting the config file — `provider` in
+  // omagif.json stays the choice you made in setup. The swap is remembered in
+  // the state directory instead, so it survives closing the picker and
+  // restarting the shell, and `./setup` clears it whenever it writes a
+  // provider: picking a service there is explicit and outranks a Ctrl+P from
+  // some earlier session.
   property string providerOverride: ""
+  property string savedProvider: ""
   // The parsed providers/index.json — the catalogue of what exists, what is
   // still offered, and where to get a key. Loaded from disk so a provider can
   // be added or retired without touching this file.
@@ -82,6 +87,12 @@ Item {
   // model and restarts every animation in the grid.
   property var previewCache: ({})
   property string nextCursor: ""
+  // The provider a request was built for. A response must be handed to the
+  // module that produced its URL: Ctrl+P, a config reload or a restored swap
+  // can all change `provider` while curl is still running, and parsing HTML
+  // with the Giphy API module yields "Unreadable response from Giphy" rather
+  // than results.
+  property string searchProvider: ""
   property bool loading: false
   property bool appending: false
   property string errorText: ""
@@ -153,12 +164,15 @@ Item {
     debounce.restart()
   }
 
-  function clearFilter() {
-    root.filterText = ""
-    root.filterSelected = false
-    root.exitHistory()
-    debounce.stop()
-    root.requestSearch()
+  // One Backspace removes one character, which is not the same as dropping the
+  // last UTF-16 code unit: an emoji is a surrogate pair, and halving it leaves
+  // an unpaired unit that renders as a replacement glyph.
+  function backspace(text) {
+    var end = text.length - 1
+    if (end <= 0) return ""
+    var last = text.charCodeAt(end)
+    if (last >= 0xDC00 && last <= 0xDFFF) end--
+    return text.slice(0, end)
   }
 
   function selectFilter() {
@@ -286,8 +300,10 @@ Item {
       root.loading = false
       return
     }
-    var url = Providers.searchUrl(config, catalogue, root.provider, root.filterText.trim(), append ? root.nextCursor : "")
+    var provider = root.provider
+    var url = Providers.searchUrl(config, catalogue, provider, root.filterText.trim(), append ? root.nextCursor : "")
     if (!url) return
+    root.searchProvider = provider
     root.appending = append
     root.loading = true
     // --fail-with-body, not -f: both make an HTTP error a non-zero exit, but
@@ -300,44 +316,47 @@ Item {
 
   // curl exit codes are diagnostic, not something to put in front of a
   // person. These are the ones a GIF search realistically hits.
-  function curlMessage(exitCode) {
-    if (exitCode === 6) return "Can\u2019t reach " + providerLabel + " \u2014 you appear to be offline"
-    if (exitCode === 7) return "Can\u2019t connect to " + providerLabel
-    if (exitCode === 28) return providerLabel + " took too long to answer"
-    if (exitCode === 35 || exitCode === 60) return "Secure connection to " + providerLabel + " failed"
-    return "Couldn\u2019t reach " + providerLabel + " (curl error " + exitCode + ")"
+  function curlMessage(exitCode, label) {
+    if (exitCode === 6) return "Can\u2019t reach " + label + " \u2014 you appear to be offline"
+    if (exitCode === 7) return "Can\u2019t connect to " + label
+    if (exitCode === 28) return label + " took too long to answer"
+    if (exitCode === 35 || exitCode === 60) return "Secure connection to " + label + " failed"
+    return "Couldn\u2019t reach " + label + " (curl error " + exitCode + ")"
   }
 
   function applyResults(raw, exitCode) {
     var append = root.appending
     var cursorAtStart = append ? root.nextCursor : ""
+    // Name the service the request actually went to, which is not necessarily
+    // the one selected by the time it came back.
+    var label = Providers.providerLabel(root.catalogue, root.searchProvider)
 
     if (exitCode !== 0 || !raw) {
       if (!append) root.items = []
       // An HTTP error still carries the service's own JSON, which explains the
       // failure better than anything we could guess at.
-      var parsed = raw ? Providers.parse(root.provider, raw, cursorAtStart) : null
+      var parsed = raw ? Providers.parse(root.searchProvider, raw, cursorAtStart) : null
       var reported = parsed ? parsed.error : ""
       var status = parsed && parsed.status ? parsed.status : 0
       if (exitCode === 22) {
-        var base = reported ? providerLabel + ": " + reported
-                            : providerLabel + " rejected the request"
+        var base = reported ? label + ": " + reported
+                            : label + " rejected the request"
         // Being over quota is not a reason to go looking at your API key.
         if (status === 429) root.errorText = base + " — try again in a minute"
         else if (status === 0 || status === 401 || status === 403)
           // Without a key there is nothing to check: a refusal is the page
           // itself saying no, which waiting usually clears.
-          root.errorText = base + (root.keyless
+          root.errorText = base + (Providers.isKeyless(root.catalogue, root.searchProvider)
             ? " — it may be throttling this machine; try again shortly"
             : " — check the API key in " + shortConfigPath())
         else root.errorText = base
       } else {
-        root.errorText = reported || root.curlMessage(exitCode)
+        root.errorText = reported || root.curlMessage(exitCode, label)
       }
       return
     }
 
-    var parsed = Providers.parse(root.provider, raw, cursorAtStart)
+    var parsed = Providers.parse(root.searchProvider, raw, cursorAtStart)
     if (parsed.error) {
       if (!append) root.items = []
       root.errorText = parsed.error
@@ -435,8 +454,44 @@ Item {
   function swapProvider() {
     if (!root.canSwapProvider) return
     root.providerOverride = root.swapTarget
+    root.rememberProvider(root.swapTarget)
     root.items = []
     root.requestSearch()
+  }
+
+  // ------------------------------------------------------- remembered provider
+
+  function loadSavedProvider(raw) {
+    var parsed = {}
+    try {
+      parsed = JSON.parse(raw)
+    } catch (e) {
+      parsed = {}
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) parsed = {}
+    root.savedProvider = String(parsed.provider || "").trim().toLowerCase()
+    root.applySavedProvider()
+  }
+
+  // Both the config and the catalogue arrive asynchronously, and a saved id is
+  // only worth honouring once they have — a provider that has since been
+  // retired, or whose key has been removed, must not strand the picker on a
+  // service it cannot search.
+  function applySavedProvider() {
+    if (!root.savedProvider) {
+      root.providerOverride = ""
+      return
+    }
+    if (!Providers.isConfigured(root.config, root.catalogue, root.savedProvider)) {
+      root.providerOverride = ""
+      return
+    }
+    root.providerOverride = root.savedProvider
+  }
+
+  function rememberProvider(id) {
+    root.savedProvider = String(id || "").trim().toLowerCase()
+    providerFile.setText(JSON.stringify({ provider: root.savedProvider }, null, 2) + "\n")
   }
 
   // ------------------------------------------------------------------- setup
@@ -478,12 +533,16 @@ Item {
         root.errorText = shortConfigPath() + " is not valid JSON"
       }
       root.config = parsed
-      root.providerOverride = ""
+      // Re-read the remembered swap alongside the config: ./setup clears it
+      // when it writes a provider, and this is how that is noticed. reload()
+      // lands on onLoaded or onLoadFailed, both of which re-apply it.
+      providerFile.reload()
+      root.applySavedProvider()
       if (root.opened) root.requestSearch()
     }
     onLoadFailed: {
       root.config = ({})
-      root.providerOverride = ""
+      root.applySavedProvider()
     }
   }
 
@@ -498,6 +557,28 @@ Item {
     id: ensureDirs
     command: ["mkdir", "-p", root.stateDir, root.configDir]
     running: true
+  }
+
+  // The provider Ctrl+P last landed on. Kept in the state directory rather
+  // than the config because it is something the picker decided, not something
+  // the user wrote — the same reason search history lives there.
+  FileView {
+    id: providerFile
+    path: root.stateDir + "/provider.json"
+    atomicWrites: true
+    printErrors: false
+    // Deliberately not watched. This file is written by Ctrl+P itself, and a
+    // watcher turned every swap into a write-reload round trip that briefly
+    // reset the override — long enough for an in-flight response to come back
+    // to the wrong parser. The only other writer is ./setup, which rewrites
+    // the config too, so configFile's own reload re-reads this alongside it.
+    onLoaded: root.loadSavedProvider(text())
+    // Absent on a fresh install, and removed by ./setup whenever it writes a
+    // provider — both mean "no swap to restore".
+    onLoadFailed: {
+      root.savedProvider = ""
+      root.applySavedProvider()
+    }
   }
 
   FileView {
@@ -527,6 +608,8 @@ Item {
         root.catalogue = ({})
         console.warn("omagif: providers/index.json is not valid JSON")
       }
+      // Whether a remembered provider is usable depends on the catalogue.
+      root.applySavedProvider()
     }
     onLoadFailed: root.catalogue = ({})
   }
@@ -600,9 +683,12 @@ Item {
           var alt = (event.modifiers & Qt.AltModifier) !== 0
 
           if (event.key === Qt.Key_Escape) {
-            if (root.filterSelected) root.filterSelected = false
-            else if (root.filterText) root.clearFilter()
-            else root.dismiss()
+            // Esc closes, whatever is in the search box. It used to clear the
+            // query first, which meant two or three presses to shut a picker
+            // you had actually finished with. The query survives the close and
+            // is still there next time — the only thing that empties it is
+            // Tab then Delete.
+            root.dismiss()
             event.accepted = true
           } else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
             // Accepted either way, so Tab never wanders off into focus
@@ -614,6 +700,14 @@ Item {
             // Plain Delete on a selected query wipes the query; Ctrl+Delete is
             // a different verb entirely, handled below.
             root.setFilter("")
+            event.accepted = true
+          } else if (!ctrl && event.key === Qt.Key_Backspace) {
+            // Nothing selected: trim the last character. Without this branch
+            // Backspace fell through unhandled — the selected-query case above
+            // was the only one that read it, and the printable-text case below
+            // ignores anything under U+0020 — so a typo could not be fixed,
+            // only typed around or wiped wholesale.
+            if (root.filterText) root.setFilter(root.backspace(root.filterText))
             event.accepted = true
           } else if (ctrl && event.key === Qt.Key_S) {
             root.runAction("save")
@@ -907,10 +1001,11 @@ Item {
             Text {
               textFormat: Text.PlainText
               visible: !root.configured
-              text: "Pick a service below. Giphy needs a free API key and gives you "
-                + "the full picker; the no-key option searches Giphy's public page "
-                + "instead — about 25 results, no scrolling for more. Setup opens in "
-                + "a terminal and takes a minute."
+              text: "Pick a service below. An API key gives you the full picker — more "
+                + "results, filters, a real API. The no-key options need no sign-up but "
+                + "read the service's public search page instead: one page of results, "
+                + "and Tenor's are large enough to notice on a metered connection. "
+                + "Setup opens in a terminal and takes a minute."
               color: root.foreground
               opacity: 0.6
               font.family: root.fontFamily

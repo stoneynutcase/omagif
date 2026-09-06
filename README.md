@@ -36,26 +36,35 @@ service or key, or press `Ctrl+,` inside the picker.
 
 ### Searching without an API key
 
-Setup offers **Giphy (no API key)** alongside the regular Giphy provider. It
-needs no sign-up — pick it and search. It reads Giphy's public search page
-instead of the API, which costs you:
+Setup offers two no-key providers — **Giphy (no API key)** and **Tenor (no API
+key)**. Neither needs a sign-up: pick one and search. `Ctrl+P` swaps between
+whatever you have set up, so you can run both with no key at all.
 
-| | With a Giphy key | No key |
+Tenor is the notable one: Google stopped issuing Tenor API keys in January
+2026, so this is the only way a new install can use Tenor. It is also the
+data-hungry one — Tenor serves much larger GIFs than Giphy, so a single search
+pulls 15-20 MB of previews and one copied GIF can be 10-20 MB. Worth knowing on
+a metered or slow connection; `setup` says so before you pick it.
+
+They read each service's public search page instead of its API, which costs
+you:
+
+| | With an API key | No key |
 |---|---|---|
-| Results per search | 40, scroll for more | ~25, no second page |
-| Rating / language filter | `rating`, `lang` | whatever the page decides |
+| Results per search | 40, scroll for more | ~25 (Giphy) / ~49 (Tenor), no second page |
+| Filters | `rating`, `lang` | whatever the page decides |
+| Traffic | you pick the rendition | Giphy under 1 MB a search; **Tenor 15-20 MB** |
 | Stability | a versioned API | scraped page — a redesign breaks it |
 
-If Giphy ever changes that page, every search starts saying it found nothing.
-Adding a key switches you to the full provider; with both set up, `Ctrl+P`
-flips between them.
+If a service changes its page, that provider starts saying it found nothing.
+The picker says so, and `Ctrl+P` moves you to another provider.
 
 ## Keys
 
 | Key | Action |
 | --- | --- |
 | type | search (empty search shows what's trending) |
-| `Tab` | select the whole query, so the next keystroke replaces it |
+| `Tab` | select the whole query — type to replace it, or `Delete` to clear it |
 | `Ctrl+Up` / `Ctrl+Down` | walk back and forward through past searches |
 | `Ctrl+Delete` | forget every remembered search |
 | `←` `→` `↑` `↓` | move around the grid |
@@ -66,13 +75,21 @@ flips between them.
 | `Alt+Enter` | copy the GIF's raw bytes as `image/gif` |
 | `Ctrl+S` | save the GIF to `~/Pictures/gifs` |
 | `Ctrl+O` | open the GIF's page in your browser |
-| `Ctrl+P` | switch provider for this session |
+| `Ctrl+P` | switch provider — remembered until you change service in setup |
 | `Ctrl+,` | reopen setup to change service or key |
-| `Backspace` / `Ctrl+U` | delete a character / clear the search |
-| `Esc` | clear the search, then close |
+| `Backspace` | delete a character |
+| `Esc` | close the picker |
 
 Left-click does the `Enter` action, middle-click copies the link, right-click
 opens the page.
+
+Your search is never cleared behind your back: `Esc` closes the picker and
+leaves the query alone, so it is still there next time. The one thing that
+empties it is `Tab` then `Delete`.
+
+`Ctrl+P` sticks too. The provider you swap to is remembered across restarts,
+and stays until you pick a service in `omagif setup` — that is an explicit
+choice, so it wins.
 
 ### What Enter copies
 
@@ -113,7 +130,7 @@ Slack.
 
 | Key | Meaning |
 | --- | --- |
-| `provider` | which service to search: `giphy`, `giphy-keyless` |
+| `provider` | which service to search: `giphy`, `giphy-keyless`, `tenor-keyless` |
 | `<provider>.apiKey` | your key; the picker says so plainly when it's missing |
 | `giphy.rating` | `g`, `pg`, `pg-13`, `r` |
 | `enterAction` | what `Enter` and left-click do: `file`, `link`, `paste`, `image` |
@@ -170,7 +187,7 @@ permission to create lives outside it:
 
 ```bash
 rm -rf ~/.config/omagif                             # config, including your API key
-rm -rf ~/.cache/omagif ~/.local/state/omagif        # cached GIFs, history, log
+rm -rf ~/.cache/omagif ~/.local/state/omagif        # cached GIFs, history, log, last provider
 rm -f  ~/.local/bin/omagif                          # the CLI symlink
 rm -f  ~/.local/share/applications/omagif.desktop   # the desktop entry
 ```
