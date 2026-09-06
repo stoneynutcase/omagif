@@ -146,6 +146,7 @@ Slack.
 | `pasteDelayMs` | wait before that keystroke (default 300) |
 | `limit` | results per page, capped at 50 |
 | `columns` | grid columns, 2–8 |
+| `maxDownloadMB` | ceiling on one GIF, 1–256 (default 48); anything larger is refused |
 | `cacheDir` | where downloaded GIFs are kept |
 | `saveDir` | where `Ctrl+S` puts GIFs |
 
@@ -181,6 +182,37 @@ wrong, both tunable:
 
 The link stays on your clipboard either way, so a missed paste is one `Ctrl+V`
 away. Actions log to `~/.local/state/omagif/omagif.log`.
+
+## What it touches
+
+A picker that fetches images off the internet and puts them on your clipboard
+should say exactly how far it reaches. In full:
+
+- **Network** — only the provider you selected: `giphy.com` for the Giphy ones,
+  `tenor.com` for the Tenor ones, plus their API endpoints. Media URLs come out
+  of a search response, so before one is downloaded or displayed it has to be
+  `https` on a host listed for that provider in
+  [`providers/index.json`](providers/index.json). Anything else is dropped, and
+  the picker says so rather than showing an empty grid. No analytics, no
+  telemetry, no other host.
+- **Your API key** — written to `~/.config/omagif/config.json`, mode 600, and
+  read from there. Giphy and Tenor both authenticate with a query parameter and
+  neither accepts a header, so the key travels in the URL; the URL is handed to
+  `curl` on stdin so it never appears in `ps` or `/proc`.
+- **Downloads** — every GIF, thumbnails included, is fetched by
+  [`bin/omagif-action`](bin/omagif-action) under a size ceiling
+  (`maxDownloadMB`, default 48) and refused unless it is a GIF no larger than
+  4096×4096. Nothing else is ever handed to the image loader.
+- **Installing** — Omagif installs no packages. `setup` checks that `curl`,
+  `python3`, `wl-copy` and `wtype` are present, names the packages they come in
+  if they are not, and stops; installing them is yours to do. It asks before
+  each thing it writes outside its own directory: the config file, the
+  `~/.local/bin/omagif` symlink, the desktop entry, and the Hyprland
+  keybinding. `omagif install` will not replace a file it did not put there —
+  it says what is in the way and leaves it alone unless you pass `--force`.
+- **Your files** — reads and writes `~/.config/omagif`, `~/.cache/omagif` and
+  `~/.local/state/omagif`; writes GIFs to `saveDir` only when you press
+  `Ctrl+S`, and never overwrites one that is already there.
 
 ## Removing it
 

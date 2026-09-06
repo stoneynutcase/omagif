@@ -82,10 +82,16 @@ Item {
 
   // ------------------------------------------------------------------ results
   property var items: []
-  // previewUrl -> locally cached file, filled in only when the remote load
-  // fails. Kept outside `items` so a thumbnail landing never rebuilds the
-  // model and restarts every animation in the grid.
+  // previewUrl -> locally cached file. Every thumbnail is displayed from here:
+  // bin/omagif-action downloads it under the scheme, host and size limits, and
+  // this is where it lands. Kept outside `items` so a thumbnail arriving never
+  // rebuilds the model and restarts every animation in the grid.
   property var previewCache: ({})
+  // Ceiling on a search response. Enforced by curl, which stops the transfer,
+  // and re-checked here on what actually arrived. A GIF search answers in tens
+  // of kilobytes of JSON; the keyless providers read a search page, which is
+  // the largest thing we ever expect and is still far under this.
+  readonly property int maxResponseBytes: 8 * 1024 * 1024
   property string nextCursor: ""
   // The provider a request was built for. A response must be handed to the
   // module that produced its URL: Ctrl+P, a config reload or a restored swap
@@ -97,6 +103,8 @@ Item {
   property bool appending: false
   property string errorText: ""
   property bool searchQueued: false
+  // The curl config for the request that is starting — see startSearch().
+  property string pendingRequest: ""
 
   // ------------------------------------------------------------------- theme
   // Shares the [menu] surface tokens, so a theme that styles the launcher and
@@ -303,14 +311,37 @@ Item {
     var provider = root.provider
     var url = Providers.searchUrl(config, catalogue, provider, root.filterText.trim(), append ? root.nextCursor : "")
     if (!url) return
+    // The URL is about to be written into a curl config file, where a quote or
+    // a newline would end the value and start something else. Nothing a
+    // provider builds contains either — every parameter is percent-encoded —
+    // so this only ever fires on a bug, and it fires before the request.
+    if (url.slice(0, 8) !== "https://" || /["\\\r\n]/.test(url)) {
+      root.loading = false
+      root.errorText = "Refused a malformed request URL"
+      return
+    }
     root.searchProvider = provider
     root.appending = append
     root.loading = true
+    // The URL carries the API key: Giphy and Tenor both authenticate with a
+    // query parameter and neither accepts a header, so the key cannot leave
+    // the URL — but it can stay out of argv, which /proc/<pid>/cmdline shows
+    // to every process on the machine. curl reads the URL from a config file
+    // on stdin instead, written in onStarted below.
+    //
     // --fail-with-body, not -f: both make an HTTP error a non-zero exit, but
     // -f also discards the response, and the response is where the service
     // explains itself ("Unauthorized", "rate limit exceeded"). curl's own
     // error goes to stderr, which we do not collect, so stdout stays JSON.
-    searchProc.command = ["curl", "-sS", "--fail-with-body", "--max-time", "12", url]
+    root.pendingRequest = "url = \"" + url + "\"\n"
+    searchProc.command = [
+      "curl", "-sS", "--fail-with-body",
+      "--proto", "=https",
+      "--max-time", "12",
+      "--max-filesize", String(root.maxResponseBytes),
+      "--config", "-"
+    ]
+    searchProc.stdinEnabled = true
     searchProc.running = true
   }
 
@@ -321,6 +352,7 @@ Item {
     if (exitCode === 7) return "Can\u2019t connect to " + label
     if (exitCode === 28) return label + " took too long to answer"
     if (exitCode === 35 || exitCode === 60) return "Secure connection to " + label + " failed"
+    if (exitCode === 63) return label + " sent more than we are willing to read"
     return "Couldn\u2019t reach " + label + " (curl error " + exitCode + ")"
   }
 
@@ -330,6 +362,15 @@ Item {
     // Name the service the request actually went to, which is not necessarily
     // the one selected by the time it came back.
     var label = Providers.providerLabel(root.catalogue, root.searchProvider)
+
+    // curl stops a transfer past the ceiling, but only once it knows the size:
+    // a chunked response with no Content-Length is measured as it arrives. So
+    // whatever did arrive is measured again here, before it is parsed.
+    if (raw && raw.length > root.maxResponseBytes) {
+      if (!append) root.items = []
+      root.errorText = label + " sent more than we are willing to read"
+      return
+    }
 
     if (exitCode !== 0 || !raw) {
       if (!append) root.items = []
@@ -363,17 +404,49 @@ Item {
       return
     }
 
-    root.errorText = ""
-    root.nextCursor = parsed.next
-    if (append) {
-      root.items = root.items.concat(parsed.items)
+    var trusted = root.trustedItems(parsed.items, root.searchProvider)
+    // Everything dropped is either a service serving media from somewhere new
+    // or a mediaHosts list that has gone stale. Both are worth saying out loud:
+    // silently showing nothing looks like a search with no results.
+    if (trusted.length === 0 && parsed.items.length > 0) {
+      if (!append) root.items = []
+      root.errorText = label + " returned media from an unexpected host"
       return
     }
 
-    root.items = parsed.items
+    root.errorText = ""
+    root.nextCursor = parsed.next
+    if (append) {
+      root.items = root.items.concat(trusted)
+      return
+    }
+
+    root.items = trusted
     root.selectedIndex = 0
-    root.cursorActive = parsed.items.length > 0
+    root.cursorActive = trusted.length > 0
     Qt.callLater(function() { resultGrid.positionViewAtBeginning() })
+  }
+
+  // The one place a media URL is admitted. Everything downstream — the grid,
+  // the preview download, every clipboard verb — reads from `items`, so a URL
+  // that is not https on a host the catalogue names for this provider never
+  // reaches curl, the image loader or xdg-open. The provider that produced an
+  // item travels with it: Ctrl+P can change the selection while a response is
+  // still in flight, and the check has to be against the service that answered.
+  function trustedItems(list, provider) {
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      var entry = list[i]
+      if (!entry) continue
+      if (!Providers.isAllowedMediaUrl(root.catalogue, provider, entry.previewUrl)) continue
+      if (!Providers.isAllowedMediaUrl(root.catalogue, provider, entry.gifUrl)) continue
+      // A share link is optional — urlFor() falls back to the media URL — but
+      // one that exists gets opened in a browser, so it is held to the same rule.
+      if (entry.pageUrl && !Providers.isAllowedMediaUrl(root.catalogue, provider, entry.pageUrl)) continue
+      entry.provider = provider
+      out.push(entry)
+    }
+    return out
   }
 
   function shortConfigPath() {
@@ -629,6 +702,15 @@ Item {
   Process {
     id: searchProc
     stdout: StdioCollector { id: searchStdout; waitForEnd: true }
+    // The request URL — API key and all — is handed over here rather than on
+    // the command line. curl reads the config to EOF before it makes the
+    // request, so stdin is closed immediately after the write; leaving it open
+    // would hang the transfer waiting for a config that never ends.
+    onStarted: {
+      searchProc.write(root.pendingRequest)
+      root.pendingRequest = ""
+      searchProc.stdinEnabled = false
+    }
     onExited: function(exitCode) {
       root.loading = false
       root.applyResults(String(searchStdout.text || "").trim(), exitCode)
@@ -880,6 +962,15 @@ Item {
                 color: cell.hasCursor ? root.selectedBackground : Util.alpha(root.foreground, 0.05)
                 clip: true
 
+                // Local files only. Qt's image loader takes a URL happily
+                // enough, but it has no size ceiling of any kind: pointed at a
+                // media URL out of a search response, a hostile or broken CDN
+                // can hand it a transfer that only stops when memory does.
+                // bin/omagif-action is where the scheme, host, byte and
+                // dimension limits live, so every thumbnail comes through it
+                // and off the disk. Downloads are content-addressed, so this
+                // costs one curl per GIF ever seen, not one per search — and
+                // it also fixes the CDN redirects Qt used to refuse outright.
                 AnimatedImage {
                   id: preview
                   anchors.fill: parent
@@ -888,16 +979,7 @@ Item {
                   cache: true
                   playing: true
                   speed: 1.0
-                  source: cell.localPath
-                    ? Util.fileUrl(cell.localPath)
-                    : (cell.modelData.previewUrl || "")
-                  // Qt's network stack occasionally refuses a CDN redirect
-                  // where curl is happy; fall back to a cached local copy
-                  // rather than showing a hole in the grid.
-                  onStatusChanged: {
-                    if (status === Image.Error && !cell.localPath && !fetchProc.running)
-                      fetchProc.running = true
-                  }
+                  source: cell.localPath ? Util.fileUrl(cell.localPath) : ""
                 }
 
                 Text {
@@ -918,6 +1000,13 @@ Item {
                   border.width: Math.max(1, Style.space(2))
                   border.color: root.selectedText
                 }
+              }
+
+              // Downloads the thumbnail the first time this cell is built. A
+              // GIF already in the cache costs one exit-0 round trip and no
+              // network; a failure leaves the placeholder glyph in place.
+              Component.onCompleted: {
+                if (!cell.localPath && !fetchProc.running) fetchProc.running = true
               }
 
               Process {

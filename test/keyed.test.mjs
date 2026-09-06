@@ -54,7 +54,7 @@ describe("keyed search (live)", { skip }, () => {
 
   test("every item has the full shape the picker needs", () => {
     for (const item of result.parsed.items) {
-      assertItemShape(assert, item)
+      assertItemShape(assert, item, { provider: "giphy" })
     }
   })
 

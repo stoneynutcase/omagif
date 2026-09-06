@@ -281,12 +281,25 @@ fi
 
 # ------------------------------------------------------------------ key
 
+# Giphy and Tenor keys are alphanumeric with - and _; nothing else is a key,
+# and refusing the rest up front is also what keeps a quote or a backslash out
+# of the curl config below.
+key_shaped() {
+  [[ $1 =~ ^[A-Za-z0-9_-]{8,128}$ ]]
+}
+
 verify_key() {
   local candidate="$1" url code
   # A provider with no verifyUrl in the catalogue simply isn't checked.
   [[ -n $verify_template ]] || { printf 'skip'; return 0; }
   url="${verify_template//\{key\}/$candidate}"
-  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url" || echo 000)"
+  # Both services authenticate with a query parameter and neither accepts a
+  # header, so the key has to be in the URL — but not on the command line,
+  # where /proc/<pid>/cmdline shows it to every process on the machine. curl
+  # reads the URL from a config file on stdin instead.
+  code="$(printf 'url = "%s"\n' "$url" |
+    curl -s -o /dev/null -w '%{http_code}' --max-time 15 --proto '=https' --config - ||
+    echo 000)"
   printf '%s' "$code"
 }
 
@@ -307,6 +320,10 @@ if [[ ${keep_existing:-false} != true ]]; then
     candidate="${candidate//[[:space:]]/}"
     if [[ -z $candidate ]]; then
       echo "  Nothing pasted."
+      continue
+    fi
+    if ! key_shaped "$candidate"; then
+      echo "  That doesn't look like an API key — they are letters, digits, - and _."
       continue
     fi
 

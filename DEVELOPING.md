@@ -14,9 +14,13 @@ Notes for working on the plugin. If you just want to use it, the
   single follow-up rather than racing a pile of requests, so fast typing costs
   one extra round trip. Scrolling to the last row pages in the next set through
   the same lane.
-- Thumbnails load straight from the provider's CDN. When Qt's network stack
-  refuses a redirect that `curl` is happy with, the cell quietly falls back to
-  a locally cached copy instead of leaving a hole in the grid.
+- Thumbnails are displayed from disk, never from a URL. Qt's image loader takes
+  a remote source happily but has no size ceiling of any kind, so every
+  thumbnail is downloaded by `bin/omagif-action` first — that is where https,
+  the host allowlist and the byte and dimension limits are — and the cell binds
+  to the cached file. Downloads are content-addressed, so it costs one `curl`
+  per GIF ever seen rather than one per search, and it also side-steps the CDN
+  redirects Qt used to refuse outright.
 - Everything with a side effect — downloading, `wl-copy`, `wtype`, saving —
   lives in `bin/omagif-action`, so it can be exercised from a shell without the
   overlay. Cached files are named by the SHA-1 of their URL, which also means a
@@ -31,6 +35,26 @@ Notes for working on the plugin. If you just want to use it, the
 
 Omagif never installs, upgrades or removes software. When `setup` finds a
 dependency missing it names the package and stops.
+
+### Where the limits are
+
+Three rules, each enforced at one place, because a check spread over four files
+is a check that eventually disagrees with itself:
+
+- **A URL is admitted once.** `Providers.isAllowedMediaUrl()` checks a media URL
+  against the `mediaHosts` of the provider that produced it, and
+  `Omagif.qml`'s `trustedItems()` drops any item that fails, before the grid,
+  the downloader or `xdg-open` ever sees it. `bin/omagif-action` re-checks the
+  same thing against the union of every provider's list, because it is also
+  reachable from a shell.
+- **A request URL never reaches argv.** Giphy and Tenor both authenticate with a
+  query parameter and neither accepts a header, so the API key has to be in the
+  URL; `curl` reads that URL from a config file on stdin, in both `Omagif.qml`
+  and `setup`, so it stays out of `/proc/<pid>/cmdline`.
+- **Nothing is unbounded.** Searches are capped by `--max-filesize` and checked
+  again on what arrived; downloads are capped by `maxDownloadMB` and then
+  checked for the GIF magic and a sane canvas size. Frame count is not in the
+  header and cannot be known cheaply — the byte ceiling is what bounds it.
 
 ## Providers
 

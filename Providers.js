@@ -219,6 +219,62 @@ function urlFor(item, verb, config, id) {
   return direct || page
 }
 
+// ---------------------------------------------------------------------- media
+
+// A media URL is not ours: it is read out of whatever answered the search — a
+// JSON payload, or scraped markup for the keyless providers — so it is exactly
+// as trustworthy as that response. Before one is downloaded or handed to an
+// image loader it has to be https and live on a host the catalogue names for
+// that provider. bin/omagif-action re-checks the same thing from the same list,
+// because it is also reachable from a shell.
+
+// QML's JavaScript has no URL parser, so the host is pulled out by hand:
+// everything between "https://" and the first "/", "?" or "#", minus any
+// credentials and port. Anything not plainly https has no host at all here.
+function urlHost(url) {
+  var value = trimmed(url)
+  if (value.slice(0, 8).toLowerCase() !== "https://") return ""
+  var rest = value.slice(8)
+  var end = rest.length
+  for (var i = 0; i < rest.length; i++) {
+    var c = rest.charAt(i)
+    if (c === "/" || c === "?" || c === "#") { end = i; break }
+  }
+  var authority = rest.slice(0, end)
+  // https://giphy.com@evil.example/ is a request to evil.example.
+  var at = authority.lastIndexOf("@")
+  if (at >= 0) authority = authority.slice(at + 1)
+  var colon = authority.indexOf(":")
+  if (colon >= 0) authority = authority.slice(0, colon)
+  return authority.toLowerCase()
+}
+
+function mediaHosts(catalogue, id) {
+  var entry = entryFor(catalogue, id)
+  var list = entry && Array.isArray(entry.mediaHosts) ? entry.mediaHosts : []
+  var out = []
+  for (var i = 0; i < list.length; i++) {
+    var host = trimmed(list[i]).toLowerCase()
+    if (host) out.push(host)
+  }
+  return out
+}
+
+// The host itself or any subdomain of it. A provider with no mediaHosts allows
+// nothing, which is the safe way round: a new provider that forgets the field
+// shows an empty grid rather than fetching wherever it is pointed.
+function isAllowedMediaUrl(catalogue, id, url) {
+  var host = urlHost(url)
+  if (!host) return false
+  var hosts = mediaHosts(catalogue, id)
+  for (var i = 0; i < hosts.length; i++) {
+    if (host === hosts[i]) return true
+    if (host.length > hosts[i].length + 1
+        && host.slice(-(hosts[i].length + 1)) === "." + hosts[i]) return true
+  }
+  return false
+}
+
 // ------------------------------------------------------------------ dispatch
 
 function searchUrl(config, catalogue, id, searchTerm, cursor) {

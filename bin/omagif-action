@@ -20,6 +20,13 @@
 # some apps re-encode to a still frame, `text/uri-list` is a file reference
 # that chat apps attach whole (animation intact), and the plain URL is what
 # anything with link unfurling turns back into a playing GIF.
+#
+# Every URL that reaches this script came out of a remote response — a search
+# API's JSON, or markup scraped off a search page — so this is the boundary
+# where one stops being text and starts being something we act on. Nothing
+# below runs until the URL is https on a host providers/index.json names, and
+# nothing is displayed, copied or saved until the bytes are inside the size and
+# dimension limits. The overlay displays only what came through here.
 
 set -euo pipefail
 
@@ -28,6 +35,17 @@ url="${2:-}"
 cache_dir="${3:-$HOME/.cache/omagif}"
 save_dir="${4:-$HOME/Pictures/gifs}"
 title="${5:-}"
+
+# Resolved through symlinks for the same reason bin/omagif does it: the
+# provider catalogue is found relative to this file, not to however it was
+# invoked.
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+CATALOGUE="$ROOT_DIR/providers/index.json"
+
+# A GIF larger than this in either direction is refused before any decoder sees
+# it — the picker's own cells are a couple of hundred pixels.
+MAX_DIMENSION=4096
 
 if [[ -z $verb || -z $url ]]; then
   echo "usage: omagif-action <verb> <url> [cache-dir] [save-dir] [title]" >&2
@@ -79,6 +97,89 @@ fail() {
   exit 1
 }
 
+# ------------------------------------------------------------------- limits
+
+# Whether a URL may be acted on at all: https, and a host that
+# providers/index.json lists under some provider's mediaHosts. The union is
+# used rather than one provider's list because this script is handed a URL, not
+# a provider — Providers.js does the stricter per-provider check on the way in.
+#
+# Fails closed. An unreadable catalogue, a missing python3 or a URL that will
+# not parse all end here, and the verb never runs.
+allowed_url() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$1" "$CATALOGUE" <<'PY'
+import json, sys
+from urllib.parse import urlsplit
+
+url, catalogue = sys.argv[1], sys.argv[2]
+try:
+    with open(catalogue) as fh:
+        data = json.load(fh)
+except (OSError, ValueError):
+    sys.exit(1)
+
+hosts = set()
+for entry in data.get("providers", []):
+    if not isinstance(entry, dict):
+        continue
+    for host in entry.get("mediaHosts") or []:
+        if isinstance(host, str) and host.strip():
+            hosts.add(host.strip().lower())
+
+try:
+    parts = urlsplit(url)
+    # .hostname drops any user:password@ and :port, which is where a URL that
+    # reads as giphy.com but resolves elsewhere would hide.
+    host = (parts.hostname or "").lower()
+except ValueError:
+    sys.exit(1)
+
+if parts.scheme != "https" or not host:
+    sys.exit(1)
+sys.exit(0 if any(host == h or host.endswith("." + h) for h in hosts) else 1)
+PY
+}
+
+# Ceiling on a single download. Tenor's keyless provider alone serves GIFs in
+# the 10-20 MB range, so the default has real headroom; `maxDownloadMB` in the
+# config moves it for anyone on a metered connection.
+max_bytes() {
+  local mb
+  mb="$(setting maxDownloadMB 48)"
+  [[ $mb =~ ^[0-9]+$ ]] || mb=48
+  ((mb < 1)) && mb=1
+  ((mb > 256)) && mb=256
+  printf '%s' $((mb * 1024 * 1024))
+}
+
+# A GIF states its canvas size in bytes 7-10 of the header, so an image that
+# would decode into something enormous can be refused while it is still a file
+# on disk. Frame count is not in the header and cannot be known this cheaply —
+# the byte ceiling is what bounds that.
+gif_ok() {
+  python3 - "$1" "$MAX_DIMENSION" <<'PY'
+import sys
+
+path, limit = sys.argv[1], int(sys.argv[2])
+try:
+    with open(path, "rb") as fh:
+        head = fh.read(10)
+except OSError:
+    sys.exit(1)
+
+if len(head) < 10 or head[:6] not in (b"GIF87a", b"GIF89a"):
+    sys.exit(1)
+width = head[6] | head[7] << 8
+height = head[8] | head[9] << 8
+sys.exit(0 if 0 < width <= limit and 0 < height <= limit else 1)
+PY
+}
+
+if ! allowed_url "$url"; then
+  fail "refused a URL that is not https on a host in providers/index.json"
+fi
+
 # Content-addressed so the same GIF is only ever downloaded once, and so a
 # title full of slashes and quotes can never shape a path.
 cache_path() {
@@ -91,18 +192,29 @@ cache_path() {
 # Downloads land on a .part file and are moved into place only once complete,
 # so an interrupted run can't leave a truncated GIF in the cache.
 fetch() {
-  local path
+  local path cap size
   path="$(cache_path "$url")"
   if [[ -s $path ]]; then
     printf '%s' "$path"
     return 0
   fi
+  cap="$(max_bytes)"
   mkdir -p "$cache_dir"
-  if ! curl -fsSL --max-time 45 -o "$path.part" "$url"; then
+  # --proto/--proto-redir: -L follows redirects, and a redirect is a second URL
+  # nobody checked — this keeps every hop https. --max-filesize stops a
+  # transfer whose declared size is over the ceiling.
+  if ! curl -fsSL --max-time 45 \
+       --proto '=https' --proto-redir '=https' \
+       --max-filesize "$cap" \
+       -o "$path.part" "$url"; then
     rm -f "$path.part"
     return 1
   fi
-  if [[ ! -s $path.part ]]; then
+  # A chunked response declares no size, so curl can only stop it as it
+  # arrives. Measure what actually landed, and check it is a GIF of a sane
+  # size before anything is asked to decode it.
+  size="$(wc -c <"$path.part" 2>/dev/null || echo 0)"
+  if ((size == 0 || size > cap)) || ! gif_ok "$path.part"; then
     rm -f "$path.part"
     return 1
   fi

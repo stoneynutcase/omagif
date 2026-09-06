@@ -1,6 +1,8 @@
 {
   "//": "Provider catalogue. Read by both Omagif.qml (via a FileView) and by ./setup, so a provider's human-facing details are stated exactly once. The matching request/parse logic lives in providers/<Id>.js — see providers/README.md.",
 
+  "//mediaHosts": "Hosts a provider's image URLs are allowed to live on, matched as the host itself or any subdomain of it. Media URLs are read out of a remote response, so nothing downloads or displays until its host is on this list and its scheme is https. bin/omagif-action enforces the union of every entry's list — see the header there.",
+
   "providers": [
     {
       "id": "giphy",
@@ -8,13 +10,15 @@
       "enabled": true,
       "keyUrl": "https://developers.giphy.com/dashboard/",
       "keyHint": "Create an app, choose the API (not the SDK), and copy its API key.",
-      "verifyUrl": "https://api.giphy.com/v1/gifs/trending?api_key={key}&limit=1"
+      "verifyUrl": "https://api.giphy.com/v1/gifs/trending?api_key={key}&limit=1",
+      "mediaHosts": ["giphy.com"]
     },
     {
       "id": "giphy-keyless",
       "label": "Giphy (no API key)",
       "enabled": true,
       "keyless": true,
+      "mediaHosts": ["giphy.com"],
       "caveat": "Reads Giphy's public search page instead of its API, so there is nothing to sign up for. In exchange: about 25 results per search with no scrolling for more, no rating or language filter, and it stops working if Giphy redesigns that page. Add a Giphy API key for the full picker.",
       "keyHint": "Nothing to do — this provider needs no key.",
       "verifyUrl": ""
@@ -26,13 +30,15 @@
       "disabledReason": "Google stopped accepting new Tenor API clients in January 2026. The v2 endpoint still serves existing keys, so this stays selectable for anyone who already has one — set enabled to true if they reopen signups.",
       "keyUrl": "https://developers.google.com/tenor/guides/quickstart",
       "keyHint": "Create a Google Cloud project, enable the Tenor API, then make an API key.",
-      "verifyUrl": "https://tenor.googleapis.com/v2/featured?key={key}&client_key=omagif&limit=1"
+      "verifyUrl": "https://tenor.googleapis.com/v2/featured?key={key}&client_key=omagif&limit=1",
+      "mediaHosts": ["tenor.com"]
     },
     {
       "id": "tenor-keyless",
       "label": "Tenor (no API key)",
       "enabled": true,
       "keyless": true,
+      "mediaHosts": ["tenor.com"],
       "caveat": "Reads Tenor's public search page instead of its API — the only way a new install can use Tenor at all, since Google stopped issuing API keys in January 2026. Heavy on traffic: Tenor serves much larger GIFs than Giphy, so one search pulls roughly 15-20 MB of previews and a single GIF you copy can be 10-20 MB. Think twice on a metered or slow connection. Also: about 49 results per search with no scrolling for more, no content filter, and it stops working if Tenor redesigns that page.",
       "keyHint": "Nothing to do — this provider needs no key.",
       "verifyUrl": ""
