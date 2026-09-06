@@ -12,7 +12,7 @@ takes an image.
 - Omarchy 4.x
 - `curl`, `wl-clipboard`, `wtype`, `python3` — all present on a stock Omarchy
 - Optionally a free [Giphy API key](https://developers.giphy.com/dashboard/);
-  there is also a [no-key option](#searching-without-an-api-key)
+  there are also [no-key options](#which-provider)
 
 ## Install
 
@@ -22,7 +22,11 @@ omarchy plugin add https://github.com/stoneynutcase/omagif --enable
 
 That's the whole install. The first time you open the picker it shows a
 **Set up** button per available service, which opens setup in a floating
-terminal. You can run it yourself too:
+terminal.
+
+![First run](first-run.png)
+
+You can run it yourself too:
 
 ```bash
 omagif setup                          # asks which service
@@ -34,30 +38,32 @@ Setup checks dependencies, helps you get a key if you want one, writes
 a keybinding. Nothing is assumed — it asks. Run it again any time to change
 service or key, or press `Ctrl+,` inside the picker.
 
-### Searching without an API key
+### Which provider?
 
-Setup offers two no-key providers — **Giphy (no API key)** and **Tenor (no API
-key)**. Neither needs a sign-up: pick one and search. `Ctrl+P` swaps between
-whatever you have set up, so you can run both with no key at all.
+Four to choose from. `setup` offers the ones you can actually use, and `Ctrl+P`
+swaps between whatever you have set up — so you can run two no-key providers
+side by side and never register for anything.
 
-Tenor is the notable one: Google stopped issuing Tenor API keys in January
-2026, so this is the only way a new install can use Tenor. It is also the
-data-hungry one — Tenor serves much larger GIFs than Giphy, so a single search
-pulls 15-20 MB of previews and one copied GIF can be 10-20 MB. Worth knowing on
-a metered or slow connection; `setup` says so before you pick it.
+| Provider | Key | Pros | Cons |
+|---|---|---|---|
+| **Giphy** | free sign-up | 40 results, scroll for more; `rating` and `lang` filters; a stable API behind it | you have to register for a key |
+| **Giphy (no API key)** | none | works instantly; light — under 1 MB a search | ~25 results, no second page; no filters; breaks if Giphy changes its page |
+| **Tenor (no API key)** | none | works instantly; most results (~49); the only way to use Tenor now | heavy — 15-20 MB a search; no filters; breaks if Tenor changes its page |
+| **Tenor** | closed | full API: 40 results, scroll, content filter | Google stopped issuing keys in January 2026 — offered only if you already hold one |
 
-They read each service's public search page instead of its API, which costs
-you:
+**If you just want it working now**, pick *Giphy (no API key)*. **If you use it
+daily**, get the free Giphy key — filters and endless scrolling are worth the
+minute it takes. **Tenor (no API key)** returns the most results and is the only
+route to Tenor since Google closed sign-ups, but it is the data-hungry one:
+Tenor serves much larger GIFs, so one search pulls 15-20 MB of previews and a
+copied GIF can be 10-20 MB. Worth knowing on a metered or slow connection —
+`setup` says so before you pick it.
 
-| | With an API key | No key |
-|---|---|---|
-| Results per search | 40, scroll for more | ~25 (Giphy) / ~49 (Tenor), no second page |
-| Filters | `rating`, `lang` | whatever the page decides |
-| Traffic | you pick the rendition | Giphy under 1 MB a search; **Tenor 15-20 MB** |
-| Stability | a versioned API | scraped page — a redesign breaks it |
-
-If a service changes its page, that provider starts saying it found nothing.
-The picker says so, and `Ctrl+P` moves you to another provider.
+The no-key providers read each service's public search page instead of its API.
+That is what buys you the instant start, and what costs you the filters, the
+second page, and the guarantee: if a service redesigns that page, its provider
+starts reporting no results. The picker says so plainly, and `Ctrl+P` moves you
+to another provider.
 
 ## Keys
 
