@@ -170,8 +170,11 @@ done
 if ((${#missing[@]} > 0)); then
   echo
   echo "Missing: ${missing[*]}"
-  echo "On Omarchy these come from the wl-clipboard, wtype, curl and python packages:"
-  echo "  omarchy pkg add wl-clipboard wtype curl python"
+  # Names the packages but does not hand over a command to run. Omagif never
+  # installs anything: it is a plugin, the dependencies are stock Omarchy, and
+  # a picker has no business reaching outside its own checkout.
+  echo "On Omarchy these ship in the wl-clipboard, wtype, curl and python packages."
+  echo "Install whichever are missing with your usual package manager."
   fail "install the missing tools and run setup again"
 fi
 
