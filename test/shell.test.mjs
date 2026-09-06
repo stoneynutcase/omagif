@@ -14,7 +14,9 @@
 import { test, describe } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, statSync, readFileSync } from "node:fs"
+import {
+  mkdtempSync, mkdirSync, symlinkSync, writeFileSync, statSync, readFileSync, chmodSync
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ROOT } from "./harness.mjs"
@@ -50,6 +52,21 @@ function linkedCli() {
   const link = join(bin, "omagif")
   symlinkSync(join(ROOT, "bin/omagif"), link)
   return { dir, link }
+}
+
+// `setup` gates on curl, python3, wl-copy and wtype. The Wayland two are not
+// on a CI runner, so without stubs setup aborts at that gate and every test
+// below it passes or fails for a reason that has nothing to do with what it
+// claims to check. Stubbing makes these hermetic: they exercise setup's own
+// logic rather than the host's package set.
+function pathWithStubbedDeps() {
+  const dir = mkdtempSync(join(tmpdir(), "omagif-bin-"))
+  for (const tool of ["wl-copy", "wtype"]) {
+    const file = join(dir, tool)
+    writeFileSync(file, "#!/bin/sh\nexit 0\n")
+    chmodSync(file, 0o755)
+  }
+  return `${dir}:${process.env.PATH}`
 }
 
 function configHome(config) {
@@ -120,7 +137,10 @@ describe("setup", () => {
     const { status, stdout, stderr } = run(
       "bash",
       [join(ROOT, "setup"), "--provider", "nope"],
-      { env: { ...process.env, XDG_CONFIG_HOME: home }, input: "" }
+      {
+        env: { ...process.env, XDG_CONFIG_HOME: home, PATH: pathWithStubbedDeps() },
+        input: ""
+      }
     )
     assert.notEqual(status, 0, `setup accepted an unknown provider:\n${stdout}${stderr}`)
   })
@@ -168,7 +188,12 @@ describe("the remembered provider", () => {
     assert.doesNotThrow(() => statSync(saved), "fixture did not create the state file")
 
     const { status } = run("bash", [join(ROOT, "setup"), "--provider", "giphy-keyless"], {
-      env: { ...process.env, XDG_CONFIG_HOME: configDir, XDG_STATE_HOME: stateDir },
+      env: {
+        ...process.env,
+        XDG_CONFIG_HOME: configDir,
+        XDG_STATE_HOME: stateDir,
+        PATH: pathWithStubbedDeps()
+      },
       input: "y\nn\nn\nn\nn\nn\n"
     })
     assert.equal(status, 0)
