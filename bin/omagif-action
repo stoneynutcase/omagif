@@ -27,8 +27,58 @@
 # below runs until the URL is https on a host providers/index.json names, and
 # nothing is displayed, copied or saved until the bytes are inside the size and
 # dimension limits. The overlay displays only what came through here.
+#
+# The other boundary is the machine this runs on. A plugin launched from a
+# desktop session inherits that session's environment, and three things follow
+# from not trusting it:
+#
+#   * PATH is replaced, not consulted, and each helper is resolved to an
+#     absolute path that belongs to root — see `trusted_bin`.
+#   * Every other variable is dropped unless it is on ENV_KEEP below.
+#   * A downloaded file is never written through a name that could be a
+#     symlink somebody else put there — see `fetch`, and the `ln` in `save`
+#     and `copy-file`.
 
 set -euo pipefail
+
+# ------------------------------------------------------------- environment
+
+# What a desktop session legitimately needs to pass in: where the display is,
+# where the bus is, where the user's directories are. Everything else goes,
+# which is what takes LD_PRELOAD, CURL_CA_BUNDLE and their friends out of the
+# picture without naming them one by one. The proxy variables stay: transfers
+# here are https-only and certificate-checked, so a proxy can carry the bytes
+# without reading or altering them, and dropping them would break anyone whose
+# network requires one.
+ENV_KEEP=(
+  HOME USER LOGNAME LANG LC_ALL TERM
+  WAYLAND_DISPLAY DISPLAY XDG_RUNTIME_DIR XDG_CURRENT_DESKTOP XDG_SESSION_TYPE
+  DBUS_SESSION_BUS_ADDRESS XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_DATA_DIRS
+  http_proxy https_proxy all_proxy no_proxy
+  OMAGIF_NO_NOTIFY
+)
+keep=" ${ENV_KEEP[*]} "
+for name in $(compgen -e || true); do
+  [[ $keep == *" $name "* ]] || unset "$name" 2>/dev/null || true
+done
+unset keep name
+
+# Bash imports functions from the environment as well as variables, and an
+# imported `cmp` or `ln` would be picked over the program of that name. Nothing
+# of ours is defined yet, so everything here came from outside.
+for name in $(compgen -A function || true); do
+  unset -f "$name" 2>/dev/null || true
+done
+unset name
+
+# The three directories a stock system keeps its programs in. Nothing is run
+# from anywhere else — ~/.local/bin is on most shells' PATH, and that is where
+# anything able to write into the home directory would put a `curl` of its own.
+TRUSTED_DIRS="/usr/local/bin /usr/bin /bin"
+PATH="/usr/local/bin:/usr/bin:/bin"
+export PATH
+hash -r
+IFS=$' \t\n'
 
 verb="${1:-}"
 url="${2:-}"
@@ -47,36 +97,163 @@ CATALOGUE="$ROOT_DIR/providers/index.json"
 # it — the picker's own cells are a couple of hundred pixels.
 MAX_DIMENSION=4096
 
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omagif"
+
 if [[ -z $verb || -z $url ]]; then
   echo "usage: omagif-action <verb> <url> [cache-dir] [save-dir] [title]" >&2
   exit 64
 fi
 
-notify() {
-  if command -v notify-send >/dev/null 2>&1; then
-    notify-send -a Omagif -i image-x-generic "$1" "${2:-}" || true
+# The interpreter every check below runs in. Named absolutely, because the
+# whole point of the section above is that `python3` off a PATH is a program
+# somebody else may have chosen. `-O` is true when the *caller* owns a file:
+# in these directories that means something running as us put it there, which
+# a system interpreter never is. The test is inverted when this runs as root,
+# where root owning it is exactly what is wanted.
+not_ours() {
+  if ((EUID == 0)); then [[ -O $1 ]]; else [[ ! -O $1 ]]; fi
+}
+
+PYTHON=""
+for candidate in /usr/bin/python3 /usr/local/bin/python3 /bin/python3; do
+  if [[ -x $candidate ]] && not_ours "$candidate"; then
+    PYTHON="$candidate"
+    break
   fi
+done
+if [[ -z $PYTHON ]]; then
+  echo "omagif-action: no python3 owned by root in $TRUSTED_DIRS" >&2
+  exit 1
+fi
+
+# Prints the absolute path of a helper, having checked that it — and every
+# symlink on the way to it — belongs to root and is writable by nobody else.
+# Fails, printing nothing, when there is no such file. Ownership is the check
+# rather than "is it on PATH" because a program you can replace is a program
+# you can be made to run.
+trusted_bin() {
+  "$PYTHON" - "$1" <<'PY'
+import os, stat, sys
+
+DIRS = ("/usr/local/bin", "/usr/bin", "/bin")
+
+
+def roots(st):
+    return st.st_uid == 0 and not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+
+
+def trusted(path, depth=0):
+    if depth > 8:
+        return False
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    if stat.S_ISLNK(st.st_mode):
+        # Permission bits on a symlink mean nothing on Linux, so ownership is
+        # the whole check here. /usr/bin/python3 is a link to whichever
+        # version is installed today, and a link somebody else can rewrite is
+        # a program somebody else picks.
+        if st.st_uid != 0:
+            return False
+        target = os.readlink(path)
+        if not os.path.isabs(target):
+            target = os.path.join(os.path.dirname(path), target)
+        target = os.path.normpath(target)
+        if not any(target == d or target.startswith(d + "/") for d in DIRS):
+            return False
+        return trusted(target, depth + 1)
+    return bool(stat.S_ISREG(st.st_mode) and roots(st) and st.st_mode & 0o111)
+
+
+for directory in DIRS:
+    try:
+        st = os.stat(directory)
+    except OSError:
+        continue
+    if not stat.S_ISDIR(st.st_mode) or not roots(st):
+        continue
+    candidate = os.path.join(directory, sys.argv[1])
+    if trusted(candidate):
+        print(candidate)
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
+# Resolving costs a process, and a verb asks for the same tool more than once.
+declare -A TOOL_CACHE=()
+tool() {
+  local name="$1"
+  if [[ -z ${TOOL_CACHE[$name]+set} ]]; then
+    TOOL_CACHE[$name]="$(trusted_bin "$name" || true)"
+  fi
+  [[ -n ${TOOL_CACHE[$name]} ]] || return 1
+  printf '%s' "${TOOL_CACHE[$name]}"
+}
+
+notify() {
+  local bin
+  [[ -z ${OMAGIF_NO_NOTIFY:-} ]] || return 0
+  bin="$(tool notify-send)" || return 0
+  "$bin" -a Omagif -i image-x-generic "$1" "${2:-}" || true
+}
+
+fail() {
+  notify "GIF failed" "$1"
+  echo "omagif-action: $1" >&2
+  exit 1
 }
 
 # The overlay launches this detached, so stdout and stderr go nowhere. Keeping
 # a small log is the only way to find out why a paste or a copy did nothing.
-LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omagif"
-LOG="$LOG_DIR/omagif.log"
-
+# It is opened with O_NOFOLLOW rather than appended to with `>>`, which would
+# write through a symlink sitting at that name, and trimmed the same way it is
+# written — this is a breadcrumb trail, not history.
 log() {
-  mkdir -p "$LOG_DIR" 2>/dev/null || return 0
-  printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG" 2>/dev/null || true
-  # Keep it from growing without bound; this is a breadcrumb trail, not history.
-  if [[ $(wc -l <"$LOG" 2>/dev/null || echo 0) -gt 500 ]]; then
-    tail -n 200 "$LOG" >"$LOG.trim" 2>/dev/null && mv -f "$LOG.trim" "$LOG"
-  fi
+  "$PYTHON" - "$LOG_DIR" "$*" <<'PY' || true
+import os, secrets, sys, time
+
+directory, message = sys.argv[1], sys.argv[2].replace("\n", " ")
+# A log that cannot be written is not worth a word of complaint — the one
+# thing it must not do is write somewhere else instead. O_NOFOLLOW turns a
+# symlink at that name into an error, and this is where that error stops.
+try:
+    os.makedirs(directory, 0o700, exist_ok=True)
+    # O_RDWR rather than O_WRONLY only so the trim below can read back what
+    # is there without opening the name a second time.
+    fd = os.open(
+        os.path.join(directory, "omagif.log"),
+        os.O_RDWR | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC,
+        0o600,
+    )
+    os.write(fd, ("%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), message)).encode("utf-8"))
+
+    with os.fdopen(os.dup(fd), "rb") as reader:
+        reader.seek(0)
+        lines = reader.readlines()
+    os.close(fd)
+
+    if len(lines) > 500:
+        dir_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        temp = ".omagif-%s" % secrets.token_hex(8)
+        fd = os.open(
+            temp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dir_fd
+        )
+        os.write(fd, b"".join(lines[-200:]))
+        os.close(fd)
+        os.rename(temp, "omagif.log", src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        os.close(dir_fd)
+except OSError:
+    pass
+PY
 }
 
 # Reads one setting out of the plugin config, falling back to a default.
 setting() {
   local key="$1" fallback="$2" value
   value="$(
-    python3 - "${XDG_CONFIG_HOME:-$HOME/.config}/omagif/config.json" "$key" 2>/dev/null <<'PY'
+    "$PYTHON" - "${XDG_CONFIG_HOME:-$HOME/.config}/omagif/config.json" "$key" 2>/dev/null <<'PY'
 import json, sys
 try:
     with open(sys.argv[1]) as fh:
@@ -91,12 +268,6 @@ PY
   printf '%s' "${value:-$fallback}"
 }
 
-fail() {
-  notify "GIF failed" "$1"
-  echo "omagif-action: $1" >&2
-  exit 1
-}
-
 # ------------------------------------------------------------------- limits
 
 # Whether a URL may be acted on at all: https, and a host that
@@ -104,11 +275,10 @@ fail() {
 # used rather than one provider's list because this script is handed a URL, not
 # a provider — Providers.js does the stricter per-provider check on the way in.
 #
-# Fails closed. An unreadable catalogue, a missing python3 or a URL that will
-# not parse all end here, and the verb never runs.
+# Fails closed. An unreadable catalogue or a URL that will not parse both end
+# here, and the verb never runs.
 allowed_url() {
-  command -v python3 >/dev/null 2>&1 || return 1
-  python3 - "$1" "$CATALOGUE" <<'PY'
+  "$PYTHON" - "$1" "$CATALOGUE" <<'PY'
 import json, sys
 from urllib.parse import urlsplit
 
@@ -153,73 +323,185 @@ max_bytes() {
   printf '%s' $((mb * 1024 * 1024))
 }
 
-# A GIF states its canvas size in bytes 7-10 of the header, so an image that
-# would decode into something enormous can be refused while it is still a file
-# on disk. Frame count is not in the header and cannot be known this cheaply —
-# the byte ceiling is what bounds that.
-gif_ok() {
-  python3 - "$1" "$MAX_DIMENSION" <<'PY'
-import sys
-
-path, limit = sys.argv[1], int(sys.argv[2])
-try:
-    with open(path, "rb") as fh:
-        head = fh.read(10)
-except OSError:
-    sys.exit(1)
-
-if len(head) < 10 or head[:6] not in (b"GIF87a", b"GIF89a"):
-    sys.exit(1)
-width = head[6] | head[7] << 8
-height = head[8] | head[9] << 8
-sys.exit(0 if 0 < width <= limit and 0 < height <= limit else 1)
-PY
-}
-
 if ! allowed_url "$url"; then
   fail "refused a URL that is not https on a host in providers/index.json"
 fi
 
-# Content-addressed so the same GIF is only ever downloaded once, and so a
-# title full of slashes and quotes can never shape a path.
-cache_path() {
-  local hash
-  hash="$(printf '%s' "$1" | sha1sum | cut -d' ' -f1)"
-  printf '%s/%s.gif' "$cache_dir" "$hash"
-}
-
 # Prints the local path of the GIF, downloading it first if it isn't cached.
-# Downloads land on a .part file and are moved into place only once complete,
-# so an interrupted run can't leave a truncated GIF in the cache.
+#
+# The cache entry is named by the SHA-1 of its URL — so the same GIF is only
+# ever downloaded once, and so a title full of slashes and quotes can never
+# shape a path. That name is also predictable to anything watching, which is
+# why none of the work below goes through a name a second time:
+#
+#   * The cache directory is walked one component at a time with O_NOFOLLOW,
+#     and the descriptor that walk ends on is what every later call is made
+#     relative to. A symlink swapped in afterwards changes nothing, because
+#     nothing resolves that path again.
+#   * The download lands in a file with a random name, created with O_EXCL, so
+#     there is nothing there to pre-empt and nothing to follow.
+#   * It is renamed into place only once complete and checked, so an
+#     interrupted run cannot leave a truncated GIF in the cache.
 fetch() {
-  local path cap size
-  path="$(cache_path "$url")"
-  if [[ -s $path ]]; then
-    printf '%s' "$path"
-    return 0
-  fi
-  cap="$(max_bytes)"
-  mkdir -p "$cache_dir"
-  # --proto/--proto-redir: -L follows redirects, and a redirect is a second URL
-  # nobody checked — this keeps every hop https. --max-filesize stops a
-  # transfer whose declared size is over the ceiling.
-  if ! curl -fsSL --max-time 45 \
-       --proto '=https' --proto-redir '=https' \
-       --max-filesize "$cap" \
-       -o "$path.part" "$url"; then
-    rm -f "$path.part"
-    return 1
-  fi
-  # A chunked response declares no size, so curl can only stop it as it
-  # arrives. Measure what actually landed, and check it is a GIF of a sane
-  # size before anything is asked to decode it.
-  size="$(wc -c <"$path.part" 2>/dev/null || echo 0)"
-  if ((size == 0 || size > cap)) || ! gif_ok "$path.part"; then
-    rm -f "$path.part"
-    return 1
-  fi
-  mv -f "$path.part" "$path"
-  printf '%s' "$path"
+  local curl_bin
+  curl_bin="$(tool curl)" || fail "no curl owned by root in $TRUSTED_DIRS"
+  "$PYTHON" - "$url" "$cache_dir" "$(max_bytes)" "$curl_bin" "$MAX_DIMENSION" <<'PY'
+import errno, hashlib, os, secrets, stat, subprocess, sys
+
+url, cache_dir, cap, curl, max_dimension = (
+    sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5])
+)
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+
+
+def die(message):
+    sys.stderr.write("omagif-action: %s\n" % message)
+    raise SystemExit(1)
+
+
+def check(fd, shown, last):
+    """Every directory on the way has to be one nobody else can rearrange."""
+    st = os.fstat(fd)
+    shared = st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    if last:
+        if st.st_uid != os.geteuid():
+            die("%s belongs to uid %d, not to you — refusing to use it" % (shown, st.st_uid))
+        if st.st_mode & 0o077:
+            # The cache directory is ours, so its mode is ours to fix. An
+            # older install left one behind at whatever umask `mkdir -p` saw,
+            # which is readable by everyone — and what you searched for is
+            # nobody else's business.
+            os.fchmod(fd, 0o700)
+    else:
+        if st.st_uid not in (0, os.geteuid()):
+            die("%s belongs to uid %d, not to you or root" % (shown, st.st_uid))
+        if shared and not st.st_mode & stat.S_ISVTX:
+            die("%s is writable by other users and not sticky" % shown)
+
+
+def open_dir(path, depth=0):
+    """A descriptor for `path`, created if missing, with the chain checked."""
+    if depth > 8:
+        die("too many symlinks on the way to %s" % path)
+    parts = [p for p in os.path.normpath(path).split("/") if p and p != "."]
+    if not os.path.isabs(path) or ".." in parts:
+        die("%s is not a plain absolute path" % path)
+
+    fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    shown = ""
+    for index, name in enumerate(parts):
+        shown += "/" + name
+        try:
+            child = os.open(name, DIR_FLAGS, dir_fd=fd)
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                try:
+                    os.mkdir(name, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    pass  # Something else got there first; open it below.
+                child = os.open(name, DIR_FLAGS, dir_fd=fd)
+            elif exc.errno in (errno.ELOOP, errno.ENOTDIR):
+                # A symlink component. Following one somebody else planted is
+                # the whole bug this avoids — but `~/.cache` pointed at
+                # another disk is an ordinary setup, so a link that is root's
+                # or ours is followed, and the walk starts again from where it
+                # leads.
+                link = os.lstat(name, dir_fd=fd)
+                if not stat.S_ISLNK(link.st_mode):
+                    die("%s is not a directory" % shown)
+                if link.st_uid not in (0, os.geteuid()):
+                    die("%s is a symlink owned by uid %d" % (shown, link.st_uid))
+                target = os.readlink(name, dir_fd=fd)
+                if not os.path.isabs(target):
+                    target = os.path.join(os.path.dirname(shown), target)
+                os.close(fd)
+                return open_dir(os.path.join(target, *parts[index + 1:]), depth + 1)
+            else:
+                die("cannot open %s: %s" % (shown, exc.strerror))
+        os.close(fd)
+        fd = child
+        check(fd, shown, index == len(parts) - 1)
+    return fd
+
+
+dir_fd = open_dir(cache_dir)
+name = hashlib.sha1(url.encode("utf-8")).hexdigest() + ".gif"
+resolved = os.path.join(os.readlink("/proc/self/fd/%d" % dir_fd), name)
+
+try:
+    cached = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=dir_fd)
+except OSError:
+    # Not there, or a symlink is sitting where our file goes — either way
+    # there is nothing here to serve, and the rename below replaces it.
+    cached = None
+if cached is not None:
+    st = os.fstat(cached)
+    os.close(cached)
+    if stat.S_ISREG(st.st_mode) and st.st_size:
+        print(resolved)
+        raise SystemExit(0)
+
+temp = ".omagif-%s" % secrets.token_hex(8)
+# O_RDWR because the header check below reads back out of this same
+# descriptor rather than reopening the file by name.
+fd = os.open(
+    temp,
+    os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+    0o600,
+    dir_fd=dir_fd,
+)
+try:
+    # --proto/--proto-redir: -L follows redirects, and a redirect is a second
+    # URL nobody checked — this keeps every hop https. --max-filesize stops a
+    # transfer whose declared size is over the ceiling. The bytes go to the
+    # descriptor opened above rather than to a name curl resolves itself.
+    result = subprocess.run(
+        [curl, "-fsS", "-L", "--max-time", "45",
+         "--proto", "=https", "--proto-redir", "=https",
+         "--max-filesize", str(cap), url],
+        stdout=fd,
+        stderr=subprocess.PIPE,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin"},
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip().splitlines()
+        die(detail[-1] if detail else "curl exited %d" % result.returncode)
+
+    # A chunked response declares no size, so curl can only stop it as it
+    # arrives. Measure what actually landed, and check it is a GIF of a sane
+    # size before anything is asked to decode it.
+    size = os.fstat(fd).st_size
+    if not 0 < size <= cap:
+        die("the download was empty or over the %d MB limit" % (cap // (1024 * 1024)))
+
+    # A GIF states its canvas size in bytes 7-10 of the header, so an image
+    # that would decode into something enormous can be refused while it is
+    # still a file on disk. Frame count is not in the header and cannot be
+    # known this cheaply — the byte ceiling is what bounds that.
+    head = os.pread(fd, 10, 0)
+    if len(head) < 10 or head[:6] not in (b"GIF87a", b"GIF89a"):
+        die("what came back is not a GIF")
+    width = head[6] | head[7] << 8
+    height = head[8] | head[9] << 8
+    if not (0 < width <= max_dimension and 0 < height <= max_dimension):
+        die("the GIF is %dx%d, over the %d pixel limit" % (width, height, max_dimension))
+
+    os.fsync(fd)
+    # Content-addressed, so replacing whatever holds this name is right: the
+    # name means those bytes. A rename swaps the directory entry itself rather
+    # than writing through it.
+    os.rename(temp, name, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+except BaseException:
+    try:
+        os.unlink(temp, dir_fd=dir_fd)
+    except OSError:
+        pass
+    raise
+finally:
+    os.close(fd)
+
+print(resolved)
+PY
 }
 
 # Lowercased, punctuation-free, and length-capped — a GIF title is arbitrary
@@ -239,47 +521,65 @@ case "$verb" in
     ;;
 
   copy-image)
+    wlcopy="$(tool wl-copy)" || fail "no wl-copy owned by root in $TRUSTED_DIRS"
     path="$(fetch)" || fail "could not download the GIF"
     # wl-copy forks and keeps serving the selection after we exit.
-    wl-copy --type image/gif <"$path" || fail "could not reach the clipboard"
+    "$wlcopy" --type image/gif <"$path" || fail "could not reach the clipboard"
     notify "GIF copied" "Paste it wherever you like"
     ;;
 
   copy-file)
+    wlcopy="$(tool wl-copy)" || fail "no wl-copy owned by root in $TRUSTED_DIRS"
     path="$(fetch)" || fail "could not download the GIF"
     # Cache files are named by hash, but this one gets attached to a message
     # with its name showing, so hand the receiving app a readable one. A
     # hardlink costs nothing and keeps a single copy of the bytes.
     name="$(slug "$title")"
     [[ -n $name ]] || name="gif"
-    mkdir -p "$cache_dir/named"
-    link="$cache_dir/named/$name.gif"
-    if [[ -e $link ]] && ! cmp -s "$path" "$link"; then
-      # Same title, different GIF — keep both rather than swapping the file
-      # out from under a paste that hasn't happened yet.
-      link="$cache_dir/named/$name-$(basename "$path" .gif | cut -c1-6).gif"
-    fi
-    ln -f "$path" "$link" 2>/dev/null || cp -f "$path" "$link"
+    stem="${path##*/}"
+    stem="${stem%.gif}"
+    mkdir -p -m 700 "$cache_dir/named"
+
+    # `ln` without `-f`: it fails rather than replacing what is at that name,
+    # a symlink included, so a name something else got to first is never
+    # written through. Same title, different GIF keeps both rather than
+    # swapping the file out from under a paste that hasn't happened yet.
+    link=""
+    for ((n = 0; n < 20; n++)); do
+      case $n in
+        0) link="$cache_dir/named/$name.gif" ;;
+        1) link="$cache_dir/named/$name-${stem:0:6}.gif" ;;
+        *) link="$cache_dir/named/$name-${stem:0:6}-$n.gif" ;;
+      esac
+      ln "$path" "$link" 2>/dev/null && break
+      cmp -s "$path" "$link" 2>/dev/null && break  # already linked, reuse it
+      link=""
+    done
+    [[ -n $link ]] || fail "could not find a free name for $name.gif"
 
     # A uri-list is CRLF-terminated by spec, and the path is percent-encoded
     # properly rather than pasted in raw, so a cache directory with a space in
     # it still produces a URI the receiving app can resolve.
-    uri="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' "$link")"
-    printf '%s\r\n' "$uri" | wl-copy --type text/uri-list || fail "could not reach the clipboard"
-    notify "GIF copied as a file" "$(basename "$link")"
+    uri="$("$PYTHON" -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri())' "$link")"
+    printf '%s\r\n' "$uri" | "$wlcopy" --type text/uri-list || fail "could not reach the clipboard"
+    notify "GIF copied as a file" "${link##*/}"
     ;;
 
   copy-url)
-    printf '%s' "$url" | wl-copy --type text/plain || fail "could not reach the clipboard"
+    wlcopy="$(tool wl-copy)" || fail "no wl-copy owned by root in $TRUSTED_DIRS"
+    printf '%s' "$url" | "$wlcopy" --type text/plain || fail "could not reach the clipboard"
     notify "Link copied" "$url"
     ;;
 
   paste-url)
+    wlcopy="$(tool wl-copy)" || fail "no wl-copy owned by root in $TRUSTED_DIRS"
+    wtype_bin="$(tool wtype)" || fail "no wtype owned by root in $TRUSTED_DIRS"
+
     # Copy first and leave it there. The emoji picker holds the selection only
     # for the length of the paste and then drops it, but a link is worth
     # keeping: if the synthetic keypress misses, Ctrl+V still works instead of
     # leaving the user with nothing.
-    printf '%s' "$url" | wl-copy --type text/plain || fail "could not reach the clipboard"
+    printf '%s' "$url" | "$wlcopy" --type text/plain || fail "could not reach the clipboard"
 
     # The overlay has just unmapped a layer surface that held *exclusive*
     # keyboard focus. The compositor hands focus back asynchronously, and a
@@ -287,7 +587,8 @@ case "$verb" in
     # an auto-paste silently does nothing.
     delay="$(setting pasteDelayMs 300)"
     [[ $delay =~ ^[0-9]+$ ]] || delay=300
-    sleep "$(awk "BEGIN { printf \"%.3f\", $delay / 1000 }")"
+    printf -v seconds '%d.%03d' $((delay / 1000)) $((delay % 1000))
+    sleep "$seconds"
 
     # Ctrl+V by default: Electron apps (Signal, Slack, Discord) handle it far
     # more reliably than Shift+Insert.
@@ -297,36 +598,46 @@ case "$verb" in
       *) keys=(-M ctrl -k v -m ctrl) ;;
     esac
 
-    if wtype "${keys[@]}" 2>>"$LOG"; then
+    if trouble="$("$wtype_bin" "${keys[@]}" 2>&1)"; then
       log "paste-url: sent ${keys[*]} after ${delay}ms"
     else
-      log "paste-url: wtype ${keys[*]} failed; link left on the clipboard"
+      log "paste-url: wtype ${keys[*]} failed (${trouble:-no output}); link left on the clipboard"
       notify "Link copied" "Auto-paste didn't land — press Ctrl+V"
     fi
     ;;
 
   save)
     path="$(fetch)" || fail "could not download the GIF"
-    mkdir -p "$save_dir"
     name="$(slug "$title")"
     [[ -n $name ]] || name="gif"
-    dest="$save_dir/$name.gif"
-    # Never clobber: walk a suffix until the name is free.
-    n=2
-    while [[ -e $dest ]]; do
-      if cmp -s "$path" "$dest"; then
+    mkdir -p "$save_dir"
+
+    # The copy is made under a random name `mktemp` creates exclusively, and
+    # `ln` gives it its real one — a single call that fails if anything holds
+    # that name instead of writing through it. Never clobbers, and never
+    # leaves a half-written GIF under a name the user will go looking for.
+    tmp="$(mktemp "$save_dir/.omagif-XXXXXXXX")" || fail "could not write to $save_dir"
+    trap 'rm -f "$tmp"' EXIT
+    cp "$path" "$tmp"
+    chmod 644 "$tmp"
+
+    dest=""
+    for ((n = 1; n < 100; n++)); do
+      if ((n == 1)); then dest="$save_dir/$name.gif"; else dest="$save_dir/$name-$n.gif"; fi
+      ln "$tmp" "$dest" 2>/dev/null && break
+      if cmp -s "$tmp" "$dest" 2>/dev/null; then
         notify "Already saved" "$dest"
         exit 0
       fi
-      dest="$save_dir/$name-$n.gif"
-      n=$((n + 1))
+      dest=""
     done
-    cp "$path" "$dest"
+    [[ -n $dest ]] || fail "could not find a free name for $name.gif"
     notify "GIF saved" "$dest"
     ;;
 
   open)
-    xdg-open "$url" >/dev/null 2>&1 &
+    opener="$(tool xdg-open)" || fail "no xdg-open owned by root in $TRUSTED_DIRS"
+    "$opener" "$url" >/dev/null 2>&1 &
     ;;
 
   *)

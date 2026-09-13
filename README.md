@@ -203,6 +203,15 @@ should say exactly how far it reaches. In full:
   [`bin/omagif-action`](bin/omagif-action) under a size ceiling
   (`maxDownloadMB`, default 48) and refused unless it is a GIF no larger than
   4096×4096. Nothing else is ever handed to the image loader.
+- **The programs it runs** — `curl`, `python3`, `wl-copy`, `wtype`, `xdg-open`
+  and `notify-send`, each by absolute path out of `/usr/local/bin`, `/usr/bin`
+  or `/bin`, and only when root owns it and nobody else can write it. `PATH` is
+  replaced rather than consulted, and every other inherited variable is dropped
+  except the handful a desktop session needs (the display, the bus, your XDG
+  directories, proxy settings). A plugin runs with your session's environment,
+  and a `curl` earlier on your `PATH` than the real one is a program you did
+  not choose. `omagif doctor` says so if one of them is installed somewhere
+  else.
 - **Installing** — Omagif installs no packages. `setup` checks that `curl`,
   `python3`, `wl-copy` and `wtype` are present, names the packages they come in
   if they are not, and stops; installing them is yours to do. It asks before
@@ -212,7 +221,12 @@ should say exactly how far it reaches. In full:
   it says what is in the way and leaves it alone unless you pass `--force`.
 - **Your files** — reads and writes `~/.config/omagif`, `~/.cache/omagif` and
   `~/.local/state/omagif`; writes GIFs to `saveDir` only when you press
-  `Ctrl+S`, and never overwrites one that is already there.
+  `Ctrl+S`, and never overwrites one that is already there. Nothing is written
+  through a name it did not create: the cache directory is opened one component
+  at a time without following symlinks and kept private (mode 700 — it is
+  tightened if an older install left it open), downloads land in a file with a
+  random name and are renamed into place once complete, and a saved GIF whose
+  name is taken becomes `name-2.gif` rather than replacing what is there.
 
 ## Removing it
 
