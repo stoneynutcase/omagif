@@ -15,8 +15,10 @@ import { test, describe } from "node:test"
 import assert from "node:assert/strict"
 import { spawnSync } from "node:child_process"
 import {
-  mkdtempSync, mkdirSync, symlinkSync, writeFileSync, statSync, readFileSync, chmodSync
+  mkdtempSync, mkdirSync, symlinkSync, writeFileSync, statSync, readFileSync, chmodSync,
+  existsSync, readdirSync, rmSync
 } from "node:fs"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ROOT } from "./harness.mjs"
@@ -304,13 +306,18 @@ describe("install refuses to take over what it does not own", () => {
 // Every URL the picker acts on came out of a remote response. bin/omagif-action
 // is the boundary where one stops being text, so it re-checks scheme and host
 // itself rather than trusting the caller — it is reachable from a shell too.
+//
+// These call it with OMAGIF_NO_NOTIFY set rather than with a stubbed
+// notify-send on PATH: the script now resolves its helpers by absolute path
+// out of the system directories and ignores PATH entirely, so a stub is not
+// what keeps a failing test from popping a real desktop notification.
 describe("omagif-action refuses a URL it was not meant to fetch", () => {
   const ACTION = join(ROOT, "bin/omagif-action")
 
   function act(url) {
     const cache = mkdtempSync(join(tmpdir(), "omagif-cache-"))
     return run("bash", [ACTION, "cache", url, cache], {
-      env: { ...process.env, PATH: pathWithStubbedDeps() }
+      env: { ...process.env, OMAGIF_NO_NOTIFY: "1" }
     })
   }
 
@@ -334,9 +341,114 @@ describe("omagif-action refuses a URL it was not meant to fetch", () => {
 
   test("an unknown verb is still refused before anything else", () => {
     const { status } = run("bash", [ACTION, "wat", "https://i.giphy.com/abc.gif"], {
-      env: { ...process.env, PATH: pathWithStubbedDeps() }
+      env: { ...process.env, OMAGIF_NO_NOTIFY: "1" }
     })
     assert.equal(status, 64)
+  })
+})
+
+// A cache entry is named for the SHA-1 of its URL, which makes the name
+// predictable to anything else running as this user — so these check that a
+// name already taken is never a name written through. The marketplace review
+// that prompted this found the opposite: the download went to
+// "<hash>.gif.part" with `curl -o`, and a symlink left at that name was
+// followed and truncated.
+//
+// Nothing here needs a network. A cache entry is seeded by hand where a hit is
+// wanted, and the cases that must be refused are refused before curl is ever
+// reached.
+describe("omagif-action does not write through names it did not create", () => {
+  const ACTION = join(ROOT, "bin/omagif-action")
+  const URL = "https://i.giphy.com/omagif-test.gif"
+  const ENTRY = createHash("sha1").update(URL).digest("hex") + ".gif"
+  // A 1x1 transparent GIF — the smallest thing the header check accepts.
+  const GIF = Buffer.from(
+    "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64"
+  )
+
+  function act(args) {
+    return run("bash", [ACTION, ...args], { env: { ...process.env, OMAGIF_NO_NOTIFY: "1" } })
+  }
+
+  // A directory with the GIF above already cached, so `cache` and `save` can
+  // run without reaching for the network.
+  function seeded() {
+    const dir = mkdtempSync(join(tmpdir(), "omagif-store-"))
+    const cache = join(dir, "cache")
+    mkdirSync(cache, { mode: 0o700 })
+    writeFileSync(join(cache, ENTRY), GIF)
+    return { dir, cache }
+  }
+
+  test("a symlink at the cache entry's name is not served as a cache hit", () => {
+    const { dir, cache } = seeded()
+    const victim = join(dir, "victim")
+    writeFileSync(victim, "PRECIOUS")
+    rmSync(join(cache, ENTRY))
+    symlinkSync(victim, join(cache, ENTRY))
+
+    // Not a hit, so it tries to download — which fails, because the URL is
+    // not a real GIF. What matters is that the file behind the link is
+    // neither handed to the caller nor written over.
+    const { status } = act(["cache", URL, cache])
+    assert.notEqual(status, 0)
+    assert.equal(readFileSync(victim, "utf8"), "PRECIOUS")
+  })
+
+  test("save leaves a name that is a dangling symlink alone", () => {
+    const { dir, cache } = seeded()
+    const pictures = join(dir, "pictures")
+    mkdirSync(pictures)
+    const target = join(dir, "not-yet-there")
+    symlinkSync(target, join(pictures, "kitten.gif"))
+
+    const { status, stderr } = act(["save", URL, cache, pictures, "Kitten"])
+    assert.equal(status, 0, stderr)
+    // The old code's `[[ -e $dest ]]` follows the link, sees nothing, and
+    // creates the file at the far end of it.
+    assert.equal(existsSync(target), false, "the symlink was followed")
+    assert.equal(readFileSync(join(pictures, "kitten-2.gif")).length, GIF.length)
+  })
+
+  test("save keeps the GIF that is already there rather than replacing it", () => {
+    const { dir, cache } = seeded()
+    const pictures = join(dir, "pictures")
+    mkdirSync(pictures)
+
+    assert.equal(act(["save", URL, cache, pictures, "Kitten"]).status, 0)
+    assert.equal(act(["save", URL, cache, pictures, "Kitten"]).status, 0)
+    assert.deepEqual(readdirSync(pictures).sort(), ["kitten.gif"])
+  })
+
+  test("a cache directory reachable only through a shared parent is refused", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omagif-store-"))
+    const shared = join(dir, "shared")
+    mkdirSync(shared, { mode: 0o777 })
+    chmodSync(shared, 0o777) // mkdir's mode is masked by the umask.
+
+    const { status, stderr } = act(["cache", URL, join(shared, "cache")])
+    assert.notEqual(status, 0)
+    assert.match(stderr, /writable by other users/)
+  })
+
+  test("a cache directory of our own that is a symlink still works", () => {
+    // `~/.cache` pointed at another disk is an ordinary setup, and the walk
+    // follows a link that belongs to root or to us.
+    const { dir, cache } = seeded()
+    const link = join(dir, "link-to-cache")
+    symlinkSync(cache, link)
+
+    const { status, stdout } = act(["cache", URL, link])
+    assert.equal(status, 0)
+    assert.equal(stdout, join(cache, ENTRY))
+  })
+
+  test("a cache directory left open by an older install is tightened", () => {
+    const { cache } = seeded()
+    chmodSync(cache, 0o755)
+
+    assert.equal(act(["cache", URL, cache]).status, 0)
+    assert.equal(statSync(cache).mode & 0o777, 0o700)
   })
 })
 

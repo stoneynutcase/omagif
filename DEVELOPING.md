@@ -38,7 +38,7 @@ dependency missing it names the package and stops.
 
 ### Where the limits are
 
-Three rules, each enforced at one place, because a check spread over four files
+Five rules, each enforced at one place, because a check spread over four files
 is a check that eventually disagrees with itself:
 
 - **A URL is admitted once.** `Providers.isAllowedMediaUrl()` checks a media URL
@@ -55,6 +55,22 @@ is a check that eventually disagrees with itself:
   again on what arrived; downloads are capped by `maxDownloadMB` and then
   checked for the GIF magic and a sane canvas size. Frame count is not in the
   header and cannot be known cheaply — the byte ceiling is what bounds it.
+- **A path is resolved once.** `fetch()` in `bin/omagif-action` walks to the
+  cache directory one component at a time with `O_NOFOLLOW`, and every open,
+  create and rename after that is made relative to the descriptor that walk
+  ended on, so nothing re-resolves a name a symlink could be swapped into. The
+  download itself goes to a random name created with `O_EXCL` and is renamed
+  into place only once it is complete and checked. Where a descriptor is not
+  worth the machinery — the named hardlink in `copy-file`, the copy in `save` —
+  `ln` does the work instead: it fails on a name already taken rather than
+  writing through it, so the fallback is a bumped name, never a clobber.
+- **A helper is a program we picked.** `trusted_bin` resolves `curl`,
+  `wl-copy`, `wtype`, `xdg-open` and `notify-send` inside `/usr/local/bin`,
+  `/usr/bin` and `/bin`, following symlinks by hand and requiring root
+  ownership at every step; `PATH` is overwritten at the top of the script and
+  the environment is cut down to a list of what a desktop session legitimately
+  supplies. `omagif doctor` and `setup` check for a dependency in the same
+  places, so "installed" means "installed where the picker will run it".
 
 ## Providers
 
@@ -184,7 +200,7 @@ are the ones Giphy causes:
 | File | Needs | Catches |
 | --- | --- | --- |
 | `registry.test.mjs` | nothing | a provider missing from the catalogue or the module registry, a keyless entry with no caveat, broken URL building |
-| `shell.test.mjs` | nothing | `setup` and `bin/omagif` breaking — syntax, the executable bit, and running the CLI **through its symlink**, which is how `omagif install` sets it up |
+| `shell.test.mjs` | nothing | `setup` and `bin/omagif` breaking — syntax, the executable bit, and running the CLI **through its symlink**, which is how `omagif install` sets it up; also that `bin/omagif-action` refuses a URL off the catalogue and never writes through a name it did not create (a planted symlink at a cache entry, a taken name in `saveDir`, a shared parent directory) |
 | `keyless.test.mjs` | network | **Giphy changing its search page** — the parse yields nothing while the request still returns `200` |
 | `tenor-keyless.test.mjs` | network | the same, for tenor.com |
 | `keyed.test.mjs` | `GIPHY_API_KEY` | the API changing shape, renditions disappearing, offset paging breaking |
