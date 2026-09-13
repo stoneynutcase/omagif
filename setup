@@ -199,13 +199,16 @@ for tool in curl python3 wl-copy wtype; do
   fi
 done
 
+# Said plainly and then moved past: the picker will refuse these at the moment
+# it needs them, but configuring a key is still worth doing, and `omagif doctor`
+# is where this counts as a fault.
 if ((${#elsewhere[@]} > 0)); then
   echo
-  echo "Installed somewhere the picker will not run them: ${elsewhere[*]}"
-  echo "It runs its helpers out of /usr/local/bin, /usr/bin and /bin only, and"
-  echo "only when root owns them — a program on PATH that anything running as"
-  echo "you can rewrite is a program anything running as you can substitute."
-  fail "install the system packages for these and run setup again"
+  echo "On PATH, but not where the picker will run them: ${elsewhere[*]}"
+  note "It runs its helpers out of /usr/local/bin, /usr/bin and /bin only, and \
+only when root owns them — a program that anything running as you can rewrite \
+is a program anything running as you can substitute. Install the system \
+package for these, or copying and pasting GIFs will not work."
 fi
 
 if ((${#missing[@]} > 0)); then
