@@ -208,7 +208,13 @@ should say exactly how far it reaches. In full:
   or `/bin`, and only when root owns it and nobody else can write it. `PATH` is
   replaced rather than consulted, and every other inherited variable is dropped
   except the handful a desktop session needs (the display, the bus, your XDG
-  directories, proxy settings). A plugin runs with your session's environment,
+  directories, proxy settings). The picker itself starts nothing but its own
+  worker: searching, downloading and even creating its directories all go
+  through [`bin/omagif-action`](bin/omagif-action), started with the
+  environment cleared, so none of it depends on what the shell was launched
+  with. Omarchy's own commands are the one exception — they need the session
+  context, so they keep it, with the system directories put ahead of whatever
+  `PATH` the session had. A plugin runs with your session's environment,
   and a `curl` earlier on your `PATH` than the real one is a program you did
   not choose. `omagif doctor` says so if one of them is installed somewhere
   else.
