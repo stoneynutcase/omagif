@@ -38,7 +38,7 @@ dependency missing it names the package and stops.
 
 ### Where the limits are
 
-Five rules, each enforced at one place, because a check spread over four files
+Six rules, each enforced at one place, because a check spread over four files
 is a check that eventually disagrees with itself:
 
 - **A URL is admitted once.** `Providers.isAllowedMediaUrl()` checks a media URL
@@ -49,8 +49,10 @@ is a check that eventually disagrees with itself:
   reachable from a shell.
 - **A request URL never reaches argv.** Giphy and Tenor both authenticate with a
   query parameter and neither accepts a header, so the API key has to be in the
-  URL; `curl` reads that URL from a config file on stdin, in both `Omagif.qml`
-  and `setup`, so it stays out of `/proc/<pid>/cmdline`.
+  URL; `curl` reads that URL from a config file on stdin, so it stays out of
+  `/proc/<pid>/cmdline`. `Omagif.qml` writes that config to the `search` verb's
+  stdin, which hands it to curl without reading it; `setup` does the same for
+  its key check.
 - **Nothing is unbounded.** Searches are capped by `--max-filesize` and checked
   again on what arrived; downloads are capped by `maxDownloadMB` and then
   checked for the GIF magic and a sane canvas size. Frame count is not in the
@@ -64,6 +66,17 @@ is a check that eventually disagrees with itself:
   worth the machinery — the named hardlink in `copy-file`, the copy in `save` —
   `ln` does the work instead: it fails on a name already taken rather than
   writing through it, so the fallback is a bumped name, never a clobber.
+- **The QML starts one program.** `Omagif.qml` runs `bin/omagif-action` and
+  nothing else, by absolute path inside the plugin, with `clearEnvironment:
+  true` and the small `childEnv` map. It used to start `mkdir` and `curl`
+  itself, which inherited the desktop session's environment — the `PATH` that
+  picks which `curl` runs, the loader variables, and `CURL_CA_BUNDLE` and
+  `SSL_CERT_FILE`, which decide who curl trusts before any flag applies, on a
+  request that carries the API key. The `init` and `search` verbs exist to
+  hold those two jobs. Omarchy's own commands (`omarchy-shell`, the terminal
+  launcher) cannot take a cleared environment — `omarchy-shell` needs
+  `OMARCHY_PATH` — so they get the system directories prepended to `PATH`
+  instead, which is the part this plugin can actually decide.
 - **A helper is a program we picked.** `trusted_bin` resolves `curl`,
   `wl-copy`, `wtype`, `xdg-open` and `notify-send` inside `/usr/local/bin`,
   `/usr/bin` and `/bin`, following symlinks by hand and requiring root
