@@ -25,6 +25,55 @@ Item {
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/omagif"
   readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || (home + "/.config")) + "/omagif"
 
+  // ------------------------------------------------- what child processes get
+  //
+  // This plugin runs inside the shell, and the shell was started by a desktop
+  // session whose environment is whatever that session had. Anything started
+  // from here would inherit it: the PATH that decides which `curl` runs, the
+  // loader variables that decide what gets loaded into it, and curl's own
+  // CURL_CA_BUNDLE, SSL_CERT_FILE and CURL_HOME, which decide who it trusts
+  // and what config it reads before a single flag below applies. A search
+  // request carries the API key, so that is not a boundary to leave open.
+  //
+  // So every Process here sets `clearEnvironment: true` and is handed this
+  // instead — the smallest set that still lets bin/omagif-action reach the
+  // display, the bus and the user's own directories. Nothing else survives,
+  // by construction rather than by naming what to drop.
+  //
+  // The programs themselves are the other half: the only thing started from
+  // this file is bin/omagif-action, by absolute path inside the plugin, and
+  // it resolves curl and the clipboard tools to root-owned files in the system
+  // directories before running them. See the header there.
+  readonly property var childEnv: root.buildChildEnv()
+
+  function buildChildEnv() {
+    var keep = [
+      "HOME", "LANG", "LC_ALL",
+      "WAYLAND_DISPLAY", "DISPLAY", "XDG_RUNTIME_DIR",
+      "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE", "DBUS_SESSION_BUS_ADDRESS",
+      "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_DATA_DIRS",
+      "http_proxy", "https_proxy", "all_proxy", "no_proxy"
+    ]
+    var env = { "PATH": "/usr/local/bin:/usr/bin:/bin" }
+    for (var i = 0; i < keep.length; i++) {
+      var value = Quickshell.env(keep[i])
+      if (value) env[keep[i]] = String(value)
+    }
+    return env
+  }
+
+  // Omarchy's own commands are the exception, and they get less than the
+  // above rather than more. `omarchy-shell` refuses to run without
+  // OMARCHY_PATH, and the floating-terminal launcher wants the session it is
+  // launching into, so neither can be handed a cleared environment. What can
+  // be said is that a copy planted earlier on the session's PATH must not win:
+  // the system directories go in front of it. These commands belong to the
+  // shell this plugin is a guest in — if that PATH is hostile, Omarchy itself
+  // ran from it long before this plugin loaded.
+  readonly property var omarchyEnv: ({
+    "PATH": "/usr/local/bin:/usr/bin:/bin" + (Quickshell.env("PATH") ? ":" + Quickshell.env("PATH") : "")
+  })
+
   property bool opened: false
   property string filterText: ""
   property int selectedIndex: 0
@@ -326,21 +375,17 @@ Item {
     // The URL carries the API key: Giphy and Tenor both authenticate with a
     // query parameter and neither accepts a header, so the key cannot leave
     // the URL — but it can stay out of argv, which /proc/<pid>/cmdline shows
-    // to every process on the machine. curl reads the URL from a config file
-    // on stdin instead, written in onStarted below.
+    // to every process on the machine. It goes into a curl config file written
+    // on stdin in onStarted below, and the worker hands that config straight
+    // to curl without reading it.
     //
-    // --fail-with-body, not -f: both make an HTTP error a non-zero exit, but
-    // -f also discards the response, and the response is where the service
-    // explains itself ("Unauthorized", "rate limit exceeded"). curl's own
-    // error goes to stderr, which we do not collect, so stdout stays JSON.
+    // The request is made by bin/omagif-action rather than by a curl started
+    // from here: that is where curl is resolved to a root-owned file in a
+    // system directory and given the timeout, the size ceiling and the
+    // https-only flags. See the `search` verb there for why it uses
+    // --fail-with-body rather than -f.
     root.pendingRequest = "url = \"" + url + "\"\n"
-    searchProc.command = [
-      "curl", "-sS", "--fail-with-body",
-      "--proto", "=https",
-      "--max-time", "12",
-      "--max-filesize", String(root.maxResponseBytes),
-      "--config", "-"
-    ]
+    searchProc.command = [root.actionBin, "search", String(root.maxResponseBytes)]
     searchProc.stdinEnabled = true
     searchProc.running = true
   }
@@ -519,9 +564,11 @@ Item {
     var url = Providers.urlFor(item, verb, root.config, root.provider)
     if (!url) return
     root.dismiss()
-    Quickshell.execDetached([
-      root.actionBin, verb, url, root.cacheDir, root.saveDir, item.title || ""
-    ])
+    Quickshell.execDetached({
+      command: [root.actionBin, verb, url, root.cacheDir, root.saveDir, item.title || ""],
+      clearEnvironment: true,
+      environment: root.childEnv
+    })
   }
 
   function swapProvider() {
@@ -581,11 +628,14 @@ Item {
     // The overlay holds exclusive keyboard focus; the terminal is unusable
     // until we let go of it.
     root.dismiss()
-    Quickshell.execDetached([
-      "omarchy-launch-floating-terminal-with-presentation",
-      Util.shellQuote(root.setupPath())
-        + (providerId ? " --provider " + Util.shellQuote(providerId) : "")
-    ])
+    Quickshell.execDetached({
+      command: [
+        "omarchy-launch-floating-terminal-with-presentation",
+        Util.shellQuote(root.setupPath())
+          + (providerId ? " --provider " + Util.shellQuote(providerId) : "")
+      ],
+      environment: root.omarchyEnv
+    })
   }
 
   // -------------------------------------------------------------------- data
@@ -628,7 +678,13 @@ Item {
   // setup ran.
   Process {
     id: ensureDirs
-    command: ["mkdir", "-p", root.stateDir, root.configDir]
+    // `init` rather than `mkdir -p`: the worker walks to each directory
+    // without following a symlink it did not make, and leaves it at 0700
+    // rather than at whatever the umask happened to be. The config directory
+    // holds an API key, so that difference is the point.
+    command: [root.actionBin, "init", root.stateDir, root.configDir]
+    clearEnvironment: true
+    environment: root.childEnv
     running: true
   }
 
@@ -701,6 +757,8 @@ Item {
 
   Process {
     id: searchProc
+    clearEnvironment: true
+    environment: root.childEnv
     stdout: StdioCollector { id: searchStdout; waitForEnd: true }
     // The request URL — API key and all — is handed over here rather than on
     // the command line. curl reads the config to EOF before it makes the
@@ -1012,6 +1070,8 @@ Item {
               Process {
                 id: fetchProc
                 command: [root.actionBin, "cache", cell.modelData.previewUrl || "", root.cacheDir]
+                clearEnvironment: true
+                environment: root.childEnv
                 stdout: StdioCollector {
                   id: fetchStdout
                   waitForEnd: true

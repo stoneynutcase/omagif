@@ -15,6 +15,12 @@
 #   save        copy the GIF into the save directory under a readable name
 #   open        open the GIF's URL in the default browser
 #
+# Two verbs take no URL, and exist because the overlay used to do these two
+# things by starting a program itself:
+#
+#   init <dir>...     create the picker's state and config directories
+#   search <bytes>    make the search request, curl's config arriving on stdin
+#
 # The three copy verbs exist because the Wayland clipboard carries one payload
 # at a time and no single one pastes everywhere: `image/gif` is raw bytes that
 # some apps re-encode to a still frame, `text/uri-list` is a file reference
@@ -99,8 +105,17 @@ MAX_DIMENSION=4096
 
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omagif"
 
-if [[ -z $verb || -z $url ]]; then
+# `init` and `search` take no URL: they are the two things the QML used to do
+# for itself by starting `mkdir` and `curl` under the shell's own environment.
+# Everything that program can reach — PATH, the loader, curl's own config and
+# CA settings — was whatever the session handed it, and the search request
+# carries the API key. Both now come through here instead, which is the one
+# place that drops the environment it inherited and runs only programs it has
+# checked. See the environment section at the top.
+if [[ -z $verb ]] || { [[ $verb != init && $verb != search ]] && [[ -z $url ]]; }; then
   echo "usage: omagif-action <verb> <url> [cache-dir] [save-dir] [title]" >&2
+  echo "       omagif-action init <dir>..." >&2
+  echo "       omagif-action search <max-bytes>   (curl config on stdin)" >&2
   exit 64
 fi
 
@@ -323,10 +338,19 @@ max_bytes() {
   printf '%s' $((mb * 1024 * 1024))
 }
 
-if ! allowed_url "$url"; then
+if [[ $verb != init && $verb != search ]] && ! allowed_url "$url"; then
   fail "refused a URL that is not https on a host in providers/index.json"
 fi
 
+# The two things that need a directory nobody else can have rearranged: the
+# download below, and the state and config directories the picker writes into.
+# Both go through `store`, which is one python program with a subcommand,
+# because the walk that establishes such a directory is the part worth having
+# exactly one copy of.
+#
+#   store fetch  <url> <cache-dir> <max-bytes> <curl> <max-dimension>
+#   store ensure <dir>...
+#
 # Prints the local path of the GIF, downloading it first if it isn't cached.
 #
 # The cache entry is named by the SHA-1 of its URL — so the same GIF is only
@@ -342,15 +366,10 @@ fi
 #     there is nothing there to pre-empt and nothing to follow.
 #   * It is renamed into place only once complete and checked, so an
 #     interrupted run cannot leave a truncated GIF in the cache.
-fetch() {
-  local curl_bin
-  curl_bin="$(tool curl)" || fail "no curl owned by root in $TRUSTED_DIRS"
-  "$PYTHON" - "$url" "$cache_dir" "$(max_bytes)" "$curl_bin" "$MAX_DIMENSION" <<'PY'
+store() {
+  "$PYTHON" - "$@" <<'PY'
 import errno, hashlib, os, secrets, stat, subprocess, sys
 
-url, cache_dir, cap, curl, max_dimension = (
-    sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5])
-)
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
 
@@ -423,6 +442,27 @@ def open_dir(path, depth=0):
         check(fd, shown, index == len(parts) - 1)
     return fd
 
+
+command = sys.argv[1]
+
+# `ensure` is the whole of the walk above and nothing else: it establishes a
+# directory and prints where it actually landed. The picker's state and config
+# directories are made this way rather than with `mkdir -p`, which would both
+# follow whatever symlink it met and leave them at the umask — and the config
+# directory holds an API key.
+if command == "ensure":
+    for path in sys.argv[2:]:
+        fd = open_dir(path)
+        print(os.readlink("/proc/self/fd/%d" % fd))
+        os.close(fd)
+    raise SystemExit(0)
+
+if command != "fetch":
+    die("unknown store command %r" % command)
+
+url, cache_dir, cap, curl, max_dimension = (
+    sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5], int(sys.argv[6])
+)
 
 dir_fd = open_dir(cache_dir)
 name = hashlib.sha1(url.encode("utf-8")).hexdigest() + ".gif"
@@ -504,6 +544,12 @@ print(resolved)
 PY
 }
 
+fetch() {
+  local curl_bin
+  curl_bin="$(tool curl)" || fail "no curl owned by root in $TRUSTED_DIRS"
+  store fetch "$url" "$cache_dir" "$(max_bytes)" "$curl_bin" "$MAX_DIMENSION"
+}
+
 # Lowercased, punctuation-free, and length-capped — a GIF title is arbitrary
 # remote text, so nothing from it reaches the filesystem unfiltered.
 slug() {
@@ -515,6 +561,37 @@ slug() {
 }
 
 case "$verb" in
+  init)
+    # The picker's state and config directories, made before it writes a
+    # history entry or watches for a config file. `shift` past the verb: the
+    # rest of the line is directories, not the usual url/cache/save trio.
+    shift
+    (($# > 0)) || { echo "omagif-action: init needs at least one directory" >&2; exit 64; }
+    store ensure "$@" >/dev/null || exit 1
+    ;;
+
+  search)
+    # curl's config — the request URL, API key and all — arrives on stdin and
+    # is handed straight to curl the same way, so the key is never in argv,
+    # where /proc/<pid>/cmdline shows it to every process on the machine.
+    #
+    # --fail-with-body, not -f: both make an HTTP error a non-zero exit, but
+    # -f also discards the response, and the response is where the service
+    # explains itself ("Unauthorized", "rate limit exceeded"). curl's own
+    # error goes to stderr, which the caller does not collect, so stdout stays
+    # JSON. exec, so the caller reads curl's own exit code.
+    cap="${2:-}"
+    [[ $cap =~ ^[0-9]+$ ]] || cap=$((2 * 1024 * 1024))
+    ((cap < 4096)) && cap=4096
+    ((cap > 64 * 1024 * 1024)) && cap=$((64 * 1024 * 1024))
+    curl_bin="$(tool curl)" || fail "no curl owned by root in $TRUSTED_DIRS"
+    exec "$curl_bin" -sS --fail-with-body \
+      --proto '=https' \
+      --max-time 12 \
+      --max-filesize "$cap" \
+      --config -
+    ;;
+
   cache)
     path="$(fetch)" || exit 1
     printf '%s' "$path"

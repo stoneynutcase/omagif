@@ -443,6 +443,50 @@ describe("omagif-action does not write through names it did not create", () => {
     assert.equal(stdout, join(cache, ENTRY))
   })
 
+  // `init` and `search` are the two things Omagif.qml used to do by starting
+  // `mkdir` and `curl` itself, under whatever environment the desktop session
+  // handed the shell. They moved here so they run under the same rules as
+  // everything else — see the environment section in bin/omagif-action.
+  test("init creates the picker's directories private", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omagif-store-"))
+    const state = join(dir, "state/omagif")
+    const config = join(dir, "config/omagif")
+
+    const { status, stderr } = act(["init", state, config])
+    assert.equal(status, 0, stderr)
+    // `mkdir -p` would have left these at the umask, and the config directory
+    // is where the API key lives.
+    assert.equal(statSync(state).mode & 0o777, 0o700)
+    assert.equal(statSync(config).mode & 0o777, 0o700)
+  })
+
+  test("init refuses a directory under a world-writable parent", () => {
+    const dir = mkdtempSync(join(tmpdir(), "omagif-store-"))
+    const shared = join(dir, "shared")
+    mkdirSync(shared, { mode: 0o777 })
+    chmodSync(shared, 0o777)
+
+    const { status, stderr } = act(["init", join(shared, "state")])
+    assert.notEqual(status, 0)
+    assert.match(stderr, /writable by other users/)
+  })
+
+  test("init without a directory is a usage error", () => {
+    assert.equal(act(["init"]).status, 64)
+  })
+
+  test("search will not make a request the config asks for over http", () => {
+    // The https-only flag moved out of the QML with the request itself; this
+    // is what proves it still applies. curl refuses the protocol outright, so
+    // nothing here touches the network.
+    const { status, stdout } = run("bash", [join(ROOT, "bin/omagif-action"), "search", "2000000"], {
+      env: { ...process.env, OMAGIF_NO_NOTIFY: "1" },
+      input: 'url = "http://example.invalid/search"\n'
+    })
+    assert.notEqual(status, 0)
+    assert.equal(stdout.trim(), "")
+  })
+
   test("a cache directory left open by an older install is tightened", () => {
     const { cache } = seeded()
     chmodSync(cache, 0o755)

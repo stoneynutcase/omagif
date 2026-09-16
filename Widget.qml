@@ -17,13 +17,25 @@ BarWidget {
     ? root.bar.shell.isPluginOpen(root.moduleName)
     : false
 
+  // The three fallbacks below start Omarchy's own CLI, and only when neither
+  // the in-process handle nor the bar's runner is available. It cannot be
+  // handed a cleared environment — `omarchy-shell` needs OMARCHY_PATH and the
+  // session's runtime directory — so the one thing said here is that the
+  // system copy wins over anything planted earlier on the session's PATH.
+  readonly property var omarchyEnv: ({
+    "PATH": "/usr/local/bin:/usr/bin:/bin" + (Quickshell.env("PATH") ? ":" + Quickshell.env("PATH") : "")
+  })
+
   function open() {
     if (root.bar && root.bar.shell && typeof root.bar.shell.summon === "function")
       root.bar.shell.summon(root.moduleName, "{}")
     else if (root.bar && typeof root.bar.run === "function")
       root.bar.run("omarchy-shell shell summon " + root.moduleName + " '{}'")
     else
-      Quickshell.execDetached(["omarchy-shell", "shell", "summon", root.moduleName, "{}"])
+      Quickshell.execDetached({
+        command: ["omarchy-shell", "shell", "summon", root.moduleName, "{}"],
+        environment: root.omarchyEnv
+      })
   }
 
   function close() {
@@ -32,7 +44,10 @@ BarWidget {
     else if (root.bar && typeof root.bar.run === "function")
       root.bar.run("omarchy-shell shell hide " + root.moduleName)
     else
-      Quickshell.execDetached(["omarchy-shell", "shell", "hide", root.moduleName])
+      Quickshell.execDetached({
+        command: ["omarchy-shell", "shell", "hide", root.moduleName],
+        environment: root.omarchyEnv
+      })
   }
 
   function toggle() {
@@ -41,7 +56,10 @@ BarWidget {
     else if (root.bar && typeof root.bar.run === "function")
       root.bar.run("omarchy-shell shell toggle " + root.moduleName + " '{}'")
     else
-      Quickshell.execDetached(["omarchy-shell", "shell", "toggle", root.moduleName, "{}"])
+      Quickshell.execDetached({
+        command: ["omarchy-shell", "shell", "toggle", root.moduleName, "{}"],
+        environment: root.omarchyEnv
+      })
   }
 
   IpcHandler {
