@@ -213,7 +213,7 @@ are the ones Giphy causes:
 | File | Needs | Catches |
 | --- | --- | --- |
 | `registry.test.mjs` | nothing | a provider missing from the catalogue or the module registry, a keyless entry with no caveat, broken URL building |
-| `shell.test.mjs` | nothing | `setup` and `bin/omagif` breaking — syntax, the executable bit, and running the CLI **through its symlink**, which is how `omagif install` sets it up; also that `bin/omagif-action` refuses a URL off the catalogue and never writes through a name it did not create (a planted symlink at a cache entry, a taken name in `saveDir`, a shared parent directory) |
+| `shell.test.mjs` | nothing | `setup` and `bin/omagif` breaking — syntax, the executable bit, and running the CLI **through its symlink**, which is how `omagif install` sets it up; also that `bin/omagif-action` refuses a URL off the catalogue and never writes through a name it did not create (a planted symlink at a cache entry, a taken name in `saveDir`, a shared parent directory); and that `manifest.json` has a semver version that `omagif version` and `doctor` report |
 | `keyless.test.mjs` | network | **Giphy changing its search page** — the parse yields nothing while the request still returns `200` |
 | `tenor-keyless.test.mjs` | network | the same, for tenor.com |
 | `keyed.test.mjs` | `GIPHY_API_KEY` | the API changing shape, renditions disappearing, offset paging breaking |
@@ -256,3 +256,39 @@ on pull requests from forks, where secrets are withheld.
 
 GitHub only runs scheduled workflows from the **default branch**, so the daily
 run happens on `main`.
+
+## Releasing
+
+Users do not install releases. `omarchy plugin update` fetches the head of the
+default branch and fast-forwards to it, so every merge to `main` reaches them
+the next time they update, whatever the version says. Versions and releases
+are for reading — "what changed, and what am I running" — not a gate.
+
+The version lives in `manifest.json` and follows semver:
+
+- **patch** (`1.0.1`): bug fixes only.
+- **minor** (`1.1.0`): something new — a provider, a key, a config option.
+- **major** (`2.0.0`): something that stops working without the user doing
+  something — a config key renamed or removed, a provider dropped, a newer
+  Omarchy or Qt required.
+
+To cut one, once the changes are merged:
+
+1. Open a pull request that only bumps `version` in `manifest.json`, titled
+   `Release 1.0.1`, and merge it.
+2. Tag the merge commit and publish the release, with notes generated from
+   the pull requests merged since the last tag:
+
+   ```bash
+   git switch main && git pull
+   gh release create v1.0.1 --target main --generate-notes
+   ```
+
+3. Edit the notes on GitHub if they need it. They are written for users, so
+   lead with what they will notice, and call out anything they have to do.
+
+The tag is always `v` plus the manifest version, and the offline tests check
+that the version is `MAJOR.MINOR.PATCH`. `omagif version` and the first line of
+`omagif doctor` print the version with the installed commit beside it. That
+commit is what pins a bug report down, since an install sits wherever `main`
+was when it last updated, usually between two tags.

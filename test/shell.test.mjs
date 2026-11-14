@@ -148,6 +148,41 @@ describe("the CLI works through its symlink", () => {
   })
 })
 
+// Releases are tagged v<manifest version>, and bug reports quote what
+// `omagif version` printed — see "Releasing" in DEVELOPING.md.
+describe("the version", () => {
+  const manifest = JSON.parse(readFileSync(join(ROOT, "manifest.json"), "utf8"))
+
+  test("manifest.json carries a semver version", () => {
+    assert.match(
+      String(manifest.version),
+      /^\d+\.\d+\.\d+$/,
+      `manifest.json version is not MAJOR.MINOR.PATCH: ${manifest.version}`
+    )
+  })
+
+  test("`omagif version` prints it, through the symlink", () => {
+    const { link } = linkedCli()
+    const { status, stdout, stderr } = run(link, ["version"])
+    assert.equal(status, 0, stderr)
+    // The commit suffix is there in a checkout and absent in a tarball, so
+    // only the version itself is pinned down.
+    assert.match(stdout, new RegExp(`^${manifest.version.replaceAll(".", "\\.")}( \\([0-9a-f]+\\))?\\n$`))
+  })
+
+  test("doctor leads with it, so a pasted report says what was installed", () => {
+    const { link } = linkedCli()
+    const home = configHome({ provider: "giphy-keyless", "giphy-keyless": {} })
+    const { stdout } = run(link, ["doctor"], {
+      env: { ...process.env, XDG_CONFIG_HOME: home, XDG_STATE_HOME: stateHome() }
+    })
+    assert.ok(
+      stdout.startsWith(`Omagif ${manifest.version}`),
+      `doctor does not start with the version:\n${stdout}`
+    )
+  })
+})
+
 describe("setup", () => {
   test("--help works without a terminal or any config", () => {
     const { status, stdout } = run("bash", [join(ROOT, "setup"), "--help"])
