@@ -576,8 +576,11 @@ Item {
 
   function swapProvider() {
     if (!root.canSwapProvider) return
-    root.providerOverride = root.swapTarget
-    root.rememberProvider(root.swapTarget)
+    // Read swapTarget once: it is bound to `provider`, so setting the override
+    // moves it on to the provider after this one.
+    var target = root.swapTarget
+    root.providerOverride = target
+    root.rememberProvider(target)
     root.items = []
     root.requestSearch()
   }
