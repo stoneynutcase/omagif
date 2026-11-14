@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "stoneynutcase.omagif",
   "name": "Omagif",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "stoneynutcase",
   "license": "MIT",
   "description": "Search Giphy and drop a GIF straight onto your clipboard",
