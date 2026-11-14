@@ -30,7 +30,31 @@ Omagif — GIF picker for the Omarchy shell
                          --force replaces files this plugin does not own
   omagif doctor          Check dependencies, config, and plugin status
   omagif history [clear] List past searches, or forget them all
+  omagif version         Print the installed version
 EOF
+}
+
+# The manifest's version, plus the commit when the plugin is its own git
+# checkout — which it is after `omarchy plugin add`. `omarchy plugin update`
+# follows the branch head rather than tags, so between releases the version
+# alone does not say which code is installed; the commit does.
+version_string() {
+  local version commit=""
+  version="$(python3 -c 'import json,sys
+try:
+    print(str(json.load(open(sys.argv[1])).get("version", "")).strip())
+except (OSError, ValueError, AttributeError):
+    pass' "$ROOT_DIR/manifest.json" 2>/dev/null || true)"
+  # Only trust git when ROOT_DIR is the top of the repository. A plugin copied
+  # into some other tracked directory (a dotfiles repo, say) would otherwise
+  # report that repository's commit as its own.
+  if command -v git >/dev/null 2>&1 &&
+    [[ $(git -C "$ROOT_DIR" rev-parse --show-toplevel 2>/dev/null) == "$ROOT_DIR" ]]; then
+    commit="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  printf '%s' "${version:-unknown}"
+  [[ -n $commit ]] && printf ' (%s)' "$commit"
+  printf '\n'
 }
 
 HISTORY="${XDG_STATE_HOME:-$HOME/.local/state}/omagif/history.json"
@@ -164,6 +188,8 @@ system_bin() {
 do_doctor() {
   local status=0
 
+  echo "Omagif $(version_string)"
+  echo
   echo "Dependencies:"
   for tool in curl wl-copy wtype xdg-open python3; do
     if system_bin "$tool" >/dev/null; then
@@ -278,6 +304,7 @@ case "${1:-toggle}" in
     shift
     do_history "$@"
     ;;
+  version | --version | -V) version_string ;;
   -h | --help | help) usage ;;
   *)
     echo "omagif: unknown command '$1'" >&2

@@ -155,7 +155,8 @@ one is mode 644, gets pasted into bug reports and rewritten by
 `omarchy refresh shell` — no place for an API key. This one is mode 600.
 
 `omagif doctor` checks your dependencies, config, and whether the shell has
-found the plugin.
+found the plugin. Its first line is the installed version and commit, which is
+worth pasting into a bug report; `omagif version` prints just that.
 
 ### Search history
 
