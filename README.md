@@ -203,7 +203,10 @@ should say exactly how far it reaches. In full:
 - **Downloads** — every GIF, thumbnails included, is fetched by
   [`bin/omagif-action`](bin/omagif-action) under a size ceiling
   (`maxDownloadMB`, default 48) and refused unless it is a GIF no larger than
-  4096×4096. Nothing else is ever handed to the image loader.
+  4096×4096. Thumbnails, which the picker decodes inside the shell, are held
+  to 8 MB, 1024×1024 and 256 MB once every frame is decoded, and are played
+  without keeping decoded frames around. Nothing else is ever handed to the
+  image loader.
 - **The programs it runs** — `curl`, `python3`, `wl-copy`, `wtype`, `xdg-open`
   and `notify-send`, each by absolute path out of `/usr/local/bin`, `/usr/bin`
   or `/bin`, and only when root owns it and nobody else can write it. `PATH` is

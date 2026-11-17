@@ -100,8 +100,21 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CATALOGUE="$ROOT_DIR/providers/index.json"
 
 # A GIF larger than this in either direction is refused before any decoder sees
-# it — the picker's own cells are a couple of hundred pixels.
+# it. This is the ceiling for what is copied, saved or opened: those hand the
+# file on to another program and the shell never decodes it.
 MAX_DIMENSION=4096
+
+# Previews are different: the picker decodes every one of them inside the
+# shared shell, a grid of them at once, so `cache` holds them to far less.
+# The services' preview renditions are 200-500 pixels and well under a
+# megabyte; 1024 and 8 MB leave room for a provider that falls back to the
+# full GIF when it has no preview. PREVIEW_MAX_DECODED is what every frame of
+# one preview would take decoded at full canvas size, which is what Qt would
+# hold if it cached the whole animation — the QML no longer asks it to, so
+# this is the bound that does not depend on that.
+PREVIEW_MAX_DIMENSION=1024
+PREVIEW_MAX_BYTES=$((8 * 1024 * 1024))
+PREVIEW_MAX_DECODED=$((256 * 1024 * 1024))
 
 LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omagif"
 
@@ -348,7 +361,7 @@ fi
 # because the walk that establishes such a directory is the part worth having
 # exactly one copy of.
 #
-#   store fetch  <url> <cache-dir> <max-bytes> <curl> <max-dimension>
+#   store fetch  <url> <cache-dir> <max-bytes> <curl> <max-dimension> <max-decoded>
 #   store ensure <dir>...
 #
 # Prints the local path of the GIF, downloading it first if it isn't cached.
@@ -366,9 +379,13 @@ fi
 #     there is nothing there to pre-empt and nothing to follow.
 #   * It is renamed into place only once complete and checked, so an
 #     interrupted run cannot leave a truncated GIF in the cache.
+#   * A cache hit is checked again, against the limits of the caller asking
+#     for it, before it is served. The name is the URL's hash, so a preview
+#     URL that is also some result's full GIF shares an entry with the copy
+#     verbs, which accept more than a preview may.
 store() {
   "$PYTHON" - "$@" <<'PY'
-import errno, hashlib, os, secrets, stat, subprocess, sys
+import errno, hashlib, mmap, os, secrets, stat, struct, subprocess, sys
 
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 
@@ -460,9 +477,95 @@ if command == "ensure":
 if command != "fetch":
     die("unknown store command %r" % command)
 
-url, cache_dir, cap, curl, max_dimension = (
-    sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5], int(sys.argv[6])
+url, cache_dir, cap, curl, max_dimension, max_decoded = (
+    sys.argv[2], sys.argv[3], int(sys.argv[4]), sys.argv[5], int(sys.argv[6]),
+    int(sys.argv[7])
 )
+
+
+def skip_sub_blocks(data, pos):
+    """Past a chain of GIF data sub-blocks: length-prefixed, ended by a zero."""
+    end = len(data)
+    while pos < end:
+        length = data[pos]
+        pos += 1
+        if length == 0:
+            return pos
+        pos += length
+    return end
+
+
+def count_frames(data, width, height):
+    """Walks the block structure and refuses an animation too big to decode.
+
+    The header bounds one frame; nothing bounds how many there are. Frames
+    compress extremely well, so a file of a few megabytes can hold thousands
+    of full-canvas images, and Qt's GIF decoder produces a full canvas for
+    every one of them. Only the block framing is read here — the image data
+    is skipped sub-block by sub-block, never decompressed.
+    """
+    pos = 13
+    flags = data[10]
+    if flags & 0x80:
+        pos += 3 << ((flags & 7) + 1)  # global colour table
+    per_frame = width * height * 4
+    frames = 0
+    while pos < len(data):
+        introducer = data[pos]
+        pos += 1
+        if introducer == 0x3B:  # trailer
+            break
+        if introducer == 0x21:  # extension: a label, then sub-blocks
+            pos = skip_sub_blocks(data, pos + 1)
+        elif introducer == 0x2C:  # image descriptor
+            if pos + 9 > len(data):
+                break
+            left, top, w, h = struct.unpack_from("<HHHH", data, pos)
+            flags = data[pos + 8]
+            pos += 9
+            if left + w > max_dimension or top + h > max_dimension:
+                die("a frame of the GIF reaches past the %d pixel limit" % max_dimension)
+            frames += 1
+            if frames * per_frame > max_decoded:
+                die("the GIF decodes to more than %d MB" % (max_decoded // (1024 * 1024)))
+            if flags & 0x80:
+                pos += 3 << ((flags & 7) + 1)  # local colour table
+            pos = skip_sub_blocks(data, pos + 1)  # +1: LZW minimum code size
+        else:
+            # Not something a GIF contains between blocks. Rather than guess
+            # where a decoder would pick up again, refuse the file.
+            die("the GIF is malformed at byte %d" % (pos - 1))
+    return frames
+
+
+def vet(fd):
+    """Everything a GIF must pass before it is handed to the caller.
+
+    Runs on a fresh download and on a cache hit alike: a hit may have been
+    stored under looser limits, or by an older version that checked less.
+    """
+    size = os.fstat(fd).st_size
+    if not 0 < size <= cap:
+        die("the GIF is empty or over the %d MB limit" % (cap // (1024 * 1024)))
+
+    # A GIF states its canvas size in bytes 7-10 of the header, so an image
+    # that would decode into something enormous can be refused while it is
+    # still a file on disk.
+    head = os.pread(fd, 13, 0)
+    if len(head) < 13 or head[:6] not in (b"GIF87a", b"GIF89a"):
+        die("what came back is not a GIF")
+    width = head[6] | head[7] << 8
+    height = head[8] | head[9] << 8
+    if not (0 < width <= max_dimension and 0 < height <= max_dimension):
+        die("the GIF is %dx%d, over the %d pixel limit" % (width, height, max_dimension))
+
+    # The frame count is not in the header. 0 means the caller never decodes
+    # the file (a copy or a save hands it on), so only the picker's previews,
+    # which the shell itself decodes, pay for the walk.
+    if max_decoded:
+        with mmap.mmap(fd, 0, access=mmap.ACCESS_READ) as data:
+            count_frames(data, width, height)
+
 
 dir_fd = open_dir(cache_dir)
 name = hashlib.sha1(url.encode("utf-8")).hexdigest() + ".gif"
@@ -475,11 +578,17 @@ except OSError:
     # there is nothing here to serve, and the rename below replaces it.
     cached = None
 if cached is not None:
-    st = os.fstat(cached)
-    os.close(cached)
-    if stat.S_ISREG(st.st_mode) and st.st_size:
-        print(resolved)
-        raise SystemExit(0)
+    try:
+        st = os.fstat(cached)
+        if stat.S_ISREG(st.st_mode) and st.st_size:
+            # Checked through the descriptor just opened, so what passes is
+            # exactly what is served. A hit that fails is refused, not
+            # deleted: under the copy verbs' limits it is still good.
+            vet(cached)
+            print(resolved)
+            raise SystemExit(0)
+    finally:
+        os.close(cached)
 
 temp = ".omagif-%s" % secrets.token_hex(8)
 # O_RDWR because the header check below reads back out of this same
@@ -510,21 +619,7 @@ try:
     # A chunked response declares no size, so curl can only stop it as it
     # arrives. Measure what actually landed, and check it is a GIF of a sane
     # size before anything is asked to decode it.
-    size = os.fstat(fd).st_size
-    if not 0 < size <= cap:
-        die("the download was empty or over the %d MB limit" % (cap // (1024 * 1024)))
-
-    # A GIF states its canvas size in bytes 7-10 of the header, so an image
-    # that would decode into something enormous can be refused while it is
-    # still a file on disk. Frame count is not in the header and cannot be
-    # known this cheaply — the byte ceiling is what bounds that.
-    head = os.pread(fd, 10, 0)
-    if len(head) < 10 or head[:6] not in (b"GIF87a", b"GIF89a"):
-        die("what came back is not a GIF")
-    width = head[6] | head[7] << 8
-    height = head[8] | head[9] << 8
-    if not (0 < width <= max_dimension and 0 < height <= max_dimension):
-        die("the GIF is %dx%d, over the %d pixel limit" % (width, height, max_dimension))
+    vet(fd)
 
     os.fsync(fd)
     # Content-addressed, so replacing whatever holds this name is right: the
@@ -546,8 +641,18 @@ PY
 
 fetch() {
   local curl_bin
+  local cap dimension decoded
   curl_bin="$(tool curl)" || fail "no curl owned by root in $TRUSTED_DIRS"
-  store fetch "$url" "$cache_dir" "$(max_bytes)" "$curl_bin" "$MAX_DIMENSION"
+  cap="$(max_bytes)"
+  dimension=$MAX_DIMENSION
+  decoded=0
+  if [[ $verb == cache ]]; then
+    # A lower maxDownloadMB still wins over the preview ceiling.
+    ((cap > PREVIEW_MAX_BYTES)) && cap=$PREVIEW_MAX_BYTES
+    dimension=$PREVIEW_MAX_DIMENSION
+    decoded=$PREVIEW_MAX_DECODED
+  fi
+  store fetch "$url" "$cache_dir" "$cap" "$curl_bin" "$dimension" "$decoded"
 }
 
 # Lowercased, punctuation-free, and length-capped — a GIF title is arbitrary

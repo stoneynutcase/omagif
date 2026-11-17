@@ -55,8 +55,13 @@ is a check that eventually disagrees with itself:
   its key check.
 - **Nothing is unbounded.** Searches are capped by `--max-filesize` and checked
   again on what arrived; downloads are capped by `maxDownloadMB` and then
-  checked for the GIF magic and a sane canvas size. Frame count is not in the
-  header and cannot be known cheaply — the byte ceiling is what bounds it.
+  checked for the GIF magic and a sane canvas size. A thumbnail (the `cache`
+  verb) is held to tighter limits, and its block structure is walked to count
+  frames, because frame count is not in the header and the byte ceiling does
+  not bound it: frames compress well enough that a few megabytes can decode to
+  gigabytes. A cache hit is vetted again under the caller's limits. The grid's
+  `AnimatedImage` runs with `cache: false`, so Qt holds one decoded frame per
+  cell rather than every frame it has shown.
 - **A path is resolved once.** `fetch()` in `bin/omagif-action` walks to the
   cache directory one component at a time with `O_NOFOLLOW`, and every open,
   create and rename after that is made relative to the descriptor that walk

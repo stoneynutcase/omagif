@@ -531,6 +531,103 @@ describe("omagif-action does not write through names it did not create", () => {
   })
 })
 
+// The picker decodes every preview inside the shared shell. The marketplace
+// review of 1.0.1 found the downloader bounded a GIF's bytes and canvas but
+// not its frame count, while the QML had Qt cache every decoded frame — so a
+// few megabytes of highly compressible frames could grow to gigabytes. These
+// seed such files straight into the cache: a hit is vetted again before it is
+// served, so none of this needs the network.
+describe("omagif-action bounds what a preview can decode", () => {
+  const ACTION = join(ROOT, "bin/omagif-action")
+  const URL = "https://i.giphy.com/omagif-bounds.gif"
+  const ENTRY = createHash("sha1").update(URL).digest("hex") + ".gif"
+
+  // A structurally valid GIF: canvas, then `frames` image descriptors each
+  // with a graphic control extension and a token data sub-block. The pixels
+  // are never decoded here; only the block framing is walked.
+  function gif({ width, height, frames, frame = {}, tail = [0x3b] }) {
+    const u16 = (n) => [n & 0xff, n >> 8]
+    const bytes = [...Buffer.from("GIF89a"), ...u16(width), ...u16(height), 0, 0, 0]
+    for (let i = 0; i < frames; i++) {
+      bytes.push(0x21, 0xf9, 4, 0, 2, 0, 0, 0)
+      bytes.push(0x2c, ...u16(frame.left ?? 0), ...u16(frame.top ?? 0),
+        ...u16(frame.width ?? width), ...u16(frame.height ?? height), 0)
+      bytes.push(2, 2, 0x44, 0x01, 0)
+    }
+    bytes.push(...tail)
+    return Buffer.from(bytes)
+  }
+
+  function seeded(content) {
+    const dir = mkdtempSync(join(tmpdir(), "omagif-bounds-"))
+    const cache = join(dir, "cache")
+    mkdirSync(cache, { mode: 0o700 })
+    writeFileSync(join(cache, ENTRY), content)
+    return { dir, cache }
+  }
+
+  function act(args) {
+    return run("bash", [ACTION, ...args], { env: { ...process.env, OMAGIF_NO_NOTIFY: "1" } })
+  }
+
+  test("an ordinary preview is served", () => {
+    const { cache } = seeded(gif({ width: 200, height: 150, frames: 120 }))
+    const { status, stdout, stderr } = act(["cache", URL, cache])
+    assert.equal(status, 0, stderr)
+    assert.equal(stdout, join(cache, ENTRY))
+  })
+
+  test("a preview with too many full-canvas frames is refused", () => {
+    // 1000x1000 is 4 MB a frame decoded; 80 of them is past the 256 MB budget
+    // in a file of a couple of kilobytes.
+    const { cache } = seeded(gif({ width: 1000, height: 1000, frames: 80 }))
+    const { status, stdout, stderr } = act(["cache", URL, cache])
+    assert.notEqual(status, 0)
+    assert.equal(stdout, "")
+    assert.match(stderr, /decodes to more than 256 MB/)
+  })
+
+  test("a preview canvas over the preview limit is refused", () => {
+    const { cache } = seeded(gif({ width: 2000, height: 100, frames: 1 }))
+    const { status, stderr } = act(["cache", URL, cache])
+    assert.notEqual(status, 0)
+    assert.match(stderr, /over the 1024 pixel limit/)
+  })
+
+  test("a frame drawn past the limit is refused even on a small canvas", () => {
+    const { cache } = seeded(gif({
+      width: 100, height: 100, frames: 1, frame: { width: 60000, height: 60000 }
+    }))
+    const { status, stderr } = act(["cache", URL, cache])
+    assert.notEqual(status, 0)
+    assert.match(stderr, /frame of the GIF reaches past/)
+  })
+
+  test("a GIF with junk between blocks is refused rather than guessed at", () => {
+    const { cache } = seeded(gif({ width: 100, height: 100, frames: 2, tail: [0x99, 0x3b] }))
+    const { status, stderr } = act(["cache", URL, cache])
+    assert.notEqual(status, 0)
+    assert.match(stderr, /malformed/)
+  })
+
+  test("a GIF without a trailer is still walked to its end", () => {
+    const { cache } = seeded(gif({ width: 100, height: 100, frames: 3, tail: [] }))
+    assert.equal(act(["cache", URL, cache]).status, 0)
+  })
+
+  test("what a preview may not be, a save still may", () => {
+    // The shell never decodes a GIF it saves or copies, so the preview limits
+    // do not apply — and a refused preview hit is not deleted for them.
+    const { dir, cache } = seeded(gif({ width: 2000, height: 1000, frames: 80 }))
+    const pictures = join(dir, "pictures")
+    mkdirSync(pictures)
+    assert.notEqual(act(["cache", URL, cache]).status, 0)
+    const { status, stderr } = act(["save", URL, cache, pictures, "Big"])
+    assert.equal(status, 0, stderr)
+    assert.deepEqual(readdirSync(pictures), ["big.gif"])
+  })
+})
+
 describe("shipped JSON is valid", () => {
   for (const file of ["providers/index.json", "omagif.example.json", "manifest.json"]) {
     test(file, () => {

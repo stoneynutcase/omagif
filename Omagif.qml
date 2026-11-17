@@ -1035,12 +1035,23 @@ Item {
                 // and off the disk. Downloads are content-addressed, so this
                 // costs one curl per GIF ever seen, not one per search — and
                 // it also fixes the CDN redirects Qt used to refuse outright.
+                //
+                // cache: false. With caching on, Qt keeps every frame it has
+                // decoded, at full canvas size, for as long as the cell lives
+                // (QMovie::CacheAll plus AnimatedImage's own frame map), so a
+                // long animation grows without limit inside the shared shell
+                // — the small cell it is drawn into changes nothing. Off, only
+                // the current frame is held, and a loop re-decodes, which a
+                // preview capped at 1024px by bin/omagif-action can afford.
+                // No sourceSize either: AnimatedImage scales each frame to
+                // exactly that size, ignoring aspect, so with
+                // PreserveAspectCrop it would only distort the thumbnail.
                 AnimatedImage {
                   id: preview
                   anchors.fill: parent
                   fillMode: Image.PreserveAspectCrop
                   asynchronous: true
-                  cache: true
+                  cache: false
                   playing: true
                   speed: 1.0
                   source: cell.localPath ? Util.fileUrl(cell.localPath) : ""
